@@ -133,6 +133,86 @@ class TestQaEngine(unittest.TestCase):
         report = QaReport(issues=[QaIssue(severity="error", category="script", message="x")])
         self.assertEqual(len(report.issues), 1)
 
+    def test_numeric_claims_backed_by_research_no_issue(self):
+        report = run_quality_assurance(
+            "The market grew 30% last year.",
+            self.profile,
+            research_claims=[
+                ResearchClaim(statement="The market grew 30 percent in 2023", status=ClaimStatus.VERIFIED)
+            ],
+        )
+        self.assertFalse(any("script claims" in issue.message for issue in report.issues))
+
+    def test_unbacked_numeric_claim_warns(self):
+        report = run_quality_assurance(
+            "The market grew 300% last year.",
+            self.profile,
+            research_claims=[
+                ResearchClaim(statement="Revenue grew steadily over the decade", status=ClaimStatus.VERIFIED)
+            ],
+        )
+        self.assertTrue(
+            any(
+                issue.severity == QaSeverity.WARNING.value
+                and "script claims 300%" in issue.message
+                and "do not mention" in issue.message
+                for issue in report.issues
+            )
+        )
+
+    def test_contradicting_numeric_claim_errors(self):
+        report = run_quality_assurance(
+            "Revenue hit 30% this year.",
+            self.profile,
+            research_claims=[
+                ResearchClaim(statement="Revenue hit 45 percent last year", status=ClaimStatus.VERIFIED)
+            ],
+        )
+        self.assertTrue(
+            any(
+                issue.severity == QaSeverity.ERROR.value
+                and "script claims 30%" in issue.message
+                and "conflicting" in issue.message
+                for issue in report.issues
+            )
+        )
+
+    def test_numbers_without_research_are_info(self):
+        report = run_quality_assurance("The market grew 300% last year.", self.profile, research_claims=None)
+        self.assertTrue(
+            any(
+                issue.severity == QaSeverity.INFO.value
+                and "cannot verify numeric claims" in issue.message
+                for issue in report.issues
+            )
+        )
+
+    def test_years_are_not_flagged_as_numeric_claims(self):
+        report = run_quality_assurance(
+            "Founded in 2024. The company was restructured in 2021.",
+            self.profile,
+            research_claims=None,
+        )
+        self.assertFalse(any("script claims" in issue.message for issue in report.issues))
+        self.assertFalse(any("cannot verify numeric claims" in issue.message for issue in report.issues))
+
+    def test_currency_claim_contradiction_errors(self):
+        report = run_quality_assurance(
+            "The deal was worth $5 billion.",
+            self.profile,
+            research_claims=[
+                ResearchClaim(statement="The deal was valued at $4 billion", status=ClaimStatus.VERIFIED)
+            ],
+        )
+        self.assertTrue(
+            any(
+                issue.severity == QaSeverity.ERROR.value
+                and "script claims $5 billion" in issue.message
+                and "conflicting" in issue.message
+                for issue in report.issues
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

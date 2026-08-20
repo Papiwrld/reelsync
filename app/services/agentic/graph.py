@@ -327,6 +327,8 @@ def plan_video_content(
         profile,
         intelligence=intelligence,
         platform=(user_context.platform if user_context else ""),
+        app_config=app_config,
+        tracker=tracker,
     )
     state.scene_plan = scene_plan.model_dump()
     state.scenes = [scene.model_dump() for scene in scene_plan.scenes]

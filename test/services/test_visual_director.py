@@ -1,7 +1,9 @@
 """Tests for the Visual Director (Phase 2C.5-2C.6)."""
 
 import unittest
+from unittest import mock
 
+from app.services.agent_llm import AgentTracker
 from app.services.content_profile import get_content_profile
 from app.services.intelligence import build_content_intelligence
 from app.services.visual_director import (
@@ -9,6 +11,9 @@ from app.services.visual_director import (
     MaterialType,
     ScenePlan,
     _classify_material_type,
+    _generate_semantic_search_terms,
+    _semantic_search_terms_for_scenes,
+    _significant_search_terms,
     plan_scenes,
     scene_plan_summary,
 )
@@ -149,6 +154,91 @@ class TestScenePlanning(unittest.TestCase):
         self.assertIn("archival", ALL_MATERIAL_TYPES)
         self.assertIn("ai_image", ALL_MATERIAL_TYPES)
         self.assertIn("map", ALL_MATERIAL_TYPES)
+
+
+class TestSemanticSearchTerms(unittest.TestCase):
+    NARRATION = "The company's revenue grew 300% under the new CEO."
+    INTENT = "data visualization showing the figures in: Revenue grew 300% under the new CEO."
+    MATERIAL = "chart"
+
+    def test_llm_success_returns_parsed_terms(self):
+        payload = {"0": ["growing bar chart", "CEO pointing at graph", "rising revenue line"]}
+        with mock.patch("app.services.visual_director._llm_json", return_value=payload):
+            terms = _generate_semantic_search_terms(self.NARRATION, self.INTENT, self.MATERIAL)
+        self.assertEqual(terms, ["growing bar chart", "CEO pointing at graph", "rising revenue line"])
+
+    def test_llm_failure_falls_back_to_deterministic(self):
+        with mock.patch(
+            "app.services.visual_director._llm_json",
+            side_effect=RuntimeError("provider exploded"),
+        ):
+            terms = _generate_semantic_search_terms(self.NARRATION, self.INTENT, self.MATERIAL)
+        self.assertEqual(terms, _significant_search_terms(self.NARRATION))
+
+    def test_degraded_tracker_skips_llm(self):
+        tracker = AgentTracker()
+        tracker.mark_degraded("provider down for test")
+        with mock.patch(
+            "app.services.agent_llm._llm_text",
+            side_effect=AssertionError("llm must not be called while degraded"),
+        ) as llm_call:
+            terms = _generate_semantic_search_terms(
+                self.NARRATION, self.INTENT, self.MATERIAL, tracker=tracker
+            )
+        llm_call.assert_not_called()
+        self.assertEqual(terms, _significant_search_terms(self.NARRATION))
+
+    def test_batch_returns_terms_per_scene(self):
+        scenes = [
+            (0, "Revenue grew 300 percent.", "data chart", "chart"),
+            (1, "Amazon opened a store in Seattle.", "location imagery", "map"),
+        ]
+        payload = {
+            "0": ["growing bar chart", "rising numbers"],
+            "scene_1": ["amazon storefront", "seattle skyline"],
+        }
+        with mock.patch("app.services.visual_director._llm_json", return_value=payload):
+            result = _semantic_search_terms_for_scenes(scenes)
+        self.assertEqual(result[0], ["growing bar chart", "rising numbers"])
+        self.assertEqual(result[1], ["amazon storefront", "seattle skyline"])
+
+    def test_batch_falls_back_per_scene_when_missing(self):
+        scenes = [
+            (0, "Revenue grew 300 percent.", "data chart", "chart"),
+            (1, "Amazon opened a store.", "location imagery", "map"),
+        ]
+        with mock.patch("app.services.visual_director._llm_json", return_value={"0": ["growing bar chart"]}):
+            result = _semantic_search_terms_for_scenes(scenes)
+        self.assertEqual(result[0], ["growing bar chart"])
+        self.assertEqual(result[1], _significant_search_terms("Amazon opened a store."))
+
+    def test_plan_scenes_uses_semantic_terms_when_llm_configured(self):
+        script = "Revenue jumped 300 percent. Amazon opened a store in Seattle. Analysts said the strategy was doomed."
+        payload = {
+            "0": ["growing bar chart", "rising revenue"],
+            "1": ["seattle storefront"],
+            "2": ["analyst document"],
+        }
+        with mock.patch("app.services.visual_director._llm_json", return_value=payload):
+            plan = plan_scenes(
+                script, get_content_profile("business"), desired_scene_count=3, app_config={"llm_provider": "test"}
+            )
+        self.assertEqual(plan.scenes[0].search_terms, ["growing bar chart", "rising revenue"])
+        self.assertEqual(plan.scenes[1].search_terms, ["seattle storefront"])
+        self.assertEqual(plan.scenes[2].search_terms, ["analyst document"])
+
+    def test_plan_scenes_without_llm_config_stays_deterministic(self):
+        script = "Revenue jumped 300 percent. Amazon opened a store in Seattle. Analysts said the strategy was doomed."
+        with mock.patch(
+            "app.services.visual_director._llm_json",
+            side_effect=AssertionError("no llm call without app_config"),
+        ) as llm_call:
+            plan = plan_scenes(script, get_content_profile("business"), desired_scene_count=3)
+        llm_call.assert_not_called()
+        self.assertEqual(
+            plan.scenes[0].search_terms,
+            _significant_search_terms("Revenue jumped 300 percent."),
+        )
 
 
 if __name__ == "__main__":

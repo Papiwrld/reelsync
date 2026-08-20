@@ -1907,6 +1907,87 @@ class TestVideoService(unittest.TestCase):
         # 2 秒片段 + 2.0 秒重叠会被收敛到 1.95 秒，进度保持为正。
         self.assertEqual(concat_video_mock.call_args.kwargs["padding"], -1.95)
 
+    def test_combine_videos_mix_concat_is_memory_bounded(self):
+        """
+        Mix 拼接必须分块处理：任意时刻同时打开的 clip 不超过 chunk 大小，
+        而不是像旧实现那样把全部片段一次性加载进内存。这里通过统计
+        _open_video_clip_quietly 的打开与 close_clip 的关闭，跟踪峰值并发。
+        """
+
+        class _FakeVideoClip:
+            def __init__(self, duration):
+                self.duration = duration
+                self.size = (1080, 1920)
+                self.w = 1080
+                self.h = 1920
+
+            def subclipped(self, start_time, end_time):
+                return _FakeVideoClip(end_time - start_time)
+
+        class _FakeAudioClip:
+            duration = 40.0
+
+            def close(self):
+                pass
+
+        def _open_fake_video_clip(video_path):
+            name = os.path.basename(video_path)
+            if name.startswith("temp-clip-"):
+                return _FakeVideoClip(5.0)
+            return _FakeVideoClip(8.0)
+
+        open_count = 0
+        close_count = 0
+        max_open = 0
+
+        def _recording_open(video_path):
+            nonlocal open_count, max_open
+            open_count += 1
+            max_open = max(max_open, open_count - close_count)
+            return _open_fake_video_clip(video_path)
+
+        def _recording_close(_clip):
+            nonlocal close_count
+            close_count += 1
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            combined_video_path = os.path.join(temp_dir, "combined.mp4")
+
+            with (
+                patch.object(vd, "AudioFileClip", return_value=_FakeAudioClip()),
+                patch.object(
+                    vd, "_open_video_clip_quietly", side_effect=_recording_open
+                ),
+                patch.object(vd, "close_clip", side_effect=_recording_close),
+                patch.object(
+                    vd,
+                    "_write_videofile_with_codec_fallback",
+                    side_effect=lambda clip, output_file, **kwargs: Path(
+                        output_file
+                    ).write_bytes(b"video-data"),
+                ),
+                patch.object(vd, "concat_video_clips_with_ffmpeg"),
+                patch.object(vd.video_effects, "crossfade_transition"),
+                patch.object(vd, "concatenate_videoclips"),
+                patch.object(vd, "delete_files"),
+            ):
+                result = vd.combine_videos(
+                    combined_video_path=combined_video_path,
+                    video_paths=[f"clip-{i}.mp4" for i in range(7)],
+                    audio_file=os.path.join(temp_dir, "audio.mp3"),
+                    video_aspect=vd.VideoAspect.portrait,
+                    video_concat_mode=vd.VideoConcatMode.sequential,
+                    video_transition_mode=vd.VideoTransitionMode.mix,
+                    max_clip_duration=5,
+                    mix_overlap_duration=1.0,
+                )
+
+        self.assertEqual(result, combined_video_path)
+        # 40s 音频会触发素材循环，processed_clips 远多于 chunk 大小；
+        # 分块拼接下同时打开的 clip 峰值必须被限制在 chunk 大小内。
+        self.assertGreaterEqual(open_count, vd._MIX_CONCAT_CHUNK_SIZE * 3)
+        self.assertLessEqual(max_open, vd._MIX_CONCAT_CHUNK_SIZE)
+
 
 class TestMaterialResolutionTolerance(unittest.TestCase):
     def test_accepts_material_at_the_nominal_minimum(self):

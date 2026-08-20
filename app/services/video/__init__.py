@@ -48,6 +48,8 @@ from .constants import (
     _MIN_MATERIAL_DIMENSION,
     _MIN_DIMENSION_TOLERANCE,
     _DEFAULT_VIDEO_CODEC,
+    _DEFAULT_VIDEO_PRESET,
+    _DEFAULT_VIDEO_CRF,
     _SUPPORTED_VIDEO_CODECS,
     _FFMPEG_CONCAT_TIMEOUT_SECONDS,
     _FFPROBE_TIMEOUT_SECONDS,
@@ -133,6 +135,27 @@ def _get_configured_video_codec() -> str:
         )
         return _DEFAULT_VIDEO_CODEC
     return configured_codec
+
+
+def _get_video_encode_args() -> dict:
+    """Return libx264 encode kwargs (preset/crf/bitrate) resolved from config.
+
+    Read at call time through ``config.app.get`` so the per-task config snapshot
+    overlay (thread-local) is honored. Unset values fall back to conservative
+    defaults, keeping output size predictable while making quality tunable.
+    """
+    preset = str(
+        config.app.get("video_preset", _DEFAULT_VIDEO_PRESET) or _DEFAULT_VIDEO_PRESET
+    ).strip()
+    try:
+        crf = int(config.app.get("video_crf", _DEFAULT_VIDEO_CRF) or _DEFAULT_VIDEO_CRF)
+    except (TypeError, ValueError):
+        crf = _DEFAULT_VIDEO_CRF
+    args: dict = {"preset": preset, "crf": crf}
+    bitrate = str(config.app.get("video_bitrate", "") or "").strip()
+    if bitrate:
+        args["bitrate"] = bitrate
+    return args
 
 
 @lru_cache(maxsize=16)
@@ -307,6 +330,12 @@ def concat_video_clips_with_ffmpeg(
         # copy 模式直接复制帧，不重新编码，也不需要指定像素格式/线程数。
         if codec != "copy":
             command.extend(["-threads", str(threads or 2), "-pix_fmt", "yuv420p"])
+            if codec == _DEFAULT_VIDEO_CODEC:
+                encode_args = _get_video_encode_args()
+                command.extend(["-preset", str(encode_args.get("preset", _DEFAULT_VIDEO_PRESET))])
+                command.extend(["-crf", str(encode_args.get("crf", _DEFAULT_VIDEO_CRF))])
+                if encode_args.get("bitrate"):
+                    command.extend(["-b:v", str(encode_args["bitrate"])])
         if max_duration is not None and max_duration > 0:
             command.extend(["-t", f"{max_duration:.3f}"])
         command.append(output_file)
@@ -693,6 +722,62 @@ def _build_blurred_background(clip, target_width: int, target_height: int):
     return blurred.with_effects([vfx.MultiplyColor(0.5)]).with_position("center")
 
 
+# MoviePy 的 concatenate_videoclips(method="compose") 返回的 CompositeVideoClip
+# 会持有全部子片段的引用，渲染时按需从各子片段 reader（ffmpeg 进程）逐帧读取。
+# 因此“折叠式拼接”（把上一次结果继续作为输入再拼下一段）无法真正释放已拼片段：
+# 上一轮 composite 被嵌套引用，其子片段 reader 必须一直打开到最终渲染完成，
+# 内存仍会随片段总数线性增长。这里改为“分块成片”：每组至多
+# _MIX_CONCAT_CHUNK_SIZE 个片段，混合拼接后立即写出临时文件并关闭全部 clip，
+# 下一轮再对临时文件分组拼接。任意时刻内存里只有一组片段驻留。
+_MIX_CONCAT_CHUNK_SIZE = 3
+
+
+def _mix_concat_group(
+    clip_files: List[str],
+    overlap: float,
+    codec: str,
+    fps: int,
+    threads: int,
+    output_file: str,
+) -> str:
+    """把一组片段做 Mix 交叉溶解拼接并写出视频文件，返回 output_file。
+
+    与旧实现等价的视觉行为：除第一个片段外，其余片段先应用 CrossFadeIn
+    交叉溶解，再用 concatenate_videoclips(..., padding=-overlap,
+    method="compose") 叠加。组内片段数即同时打开的句柄峰值（调用方保证
+    不超过 _MIX_CONCAT_CHUNK_SIZE）。无论成功或失败，本函数打开的所有
+    clip 都会在 finally 中关闭，句柄不会泄漏到异常路径。
+    """
+    group_clips = []
+    final_video = None
+    try:
+        for i, clip_file in enumerate(clip_files):
+            clip = _open_video_clip_quietly(clip_file)
+            if i > 0:
+                clip = video_effects.crossfade_transition(clip, overlap)
+            group_clips.append(clip)
+
+        final_video = concatenate_videoclips(
+            group_clips, padding=-overlap, method="compose"
+        )
+        _write_videofile_with_codec_fallback(
+            final_video,
+            output_file,
+            codec=codec,
+            logger=None,
+            fps=fps,
+            threads=threads,
+            **_get_video_encode_args(),
+        )
+    finally:
+        # composite 递归引用组内片段；先关 composite 再关一遍显式列表，
+        # 与旧 mix 分支的双重清理一致，确保 reader 一定被释放。
+        close_clip(final_video)
+        for clip in group_clips:
+            close_clip(clip)
+    return output_file
+
+
 def combine_videos(
     combined_video_path: str,
     video_paths: List[str],
@@ -930,6 +1015,7 @@ def combine_videos(
                 logger=None,
                 fps=fps,
                 threads=threads,
+                **_get_video_encode_args(),
             )
 
             # Store clip duration before closing
@@ -1010,34 +1096,45 @@ def combine_videos(
 
     clip_files = [clip.file_path for clip in processed_clips]
 
-    loaded_clips = []
-    final_video = None
+    intermediate_files: List[str] = []
     try:
         if transition_value == VideoTransitionMode.mix.value:
             logger.info(
                 f"concatenating {len(clip_files)} clips using MoviePy cross-dissolve overlap"
             )
-            loaded_clips = []
-            for i, f in enumerate(clip_files):
-                c = _open_video_clip_quietly(f)
-                if i > 0:
-                    c = video_effects.crossfade_transition(c, effective_mix_overlap)
-                loaded_clips.append(c)
+            # 分块混合拼接，避免长视频把所有片段一次性加载进内存。每组
+            # （<= _MIX_CONCAT_CHUNK_SIZE）拼接后立即写出临时文件并关闭句柄，
+            # 下一轮再把这些临时文件分组继续拼，直到只剩一个文件写出最终成片。
+            current_files = clip_files
+            chunk_counter = 0
+            while len(current_files) > _MIX_CONCAT_CHUNK_SIZE:
+                next_files: List[str] = []
+                for i in range(0, len(current_files), _MIX_CONCAT_CHUNK_SIZE):
+                    group = current_files[i : i + _MIX_CONCAT_CHUNK_SIZE]
+                    chunk_counter += 1
+                    group_output = os.path.join(
+                        output_dir, f"mix-chunk-{chunk_counter}.mp4"
+                    )
+                    _mix_concat_group(
+                        group,
+                        effective_mix_overlap,
+                        _get_configured_video_codec(),
+                        fps,
+                        threads,
+                        group_output,
+                    )
+                    intermediate_files.append(group_output)
+                    next_files.append(group_output)
+                current_files = next_files
 
-            final_video = concatenate_videoclips(
-                loaded_clips, padding=-effective_mix_overlap, method="compose"
-            )
-            _write_videofile_with_codec_fallback(
-                final_video,
+            _mix_concat_group(
+                current_files,
+                effective_mix_overlap,
+                _get_configured_video_codec(),
+                fps,
+                threads,
                 combined_video_path,
-                codec=_get_configured_video_codec(),
-                logger=None,
-                fps=fps,
-                threads=threads,
             )
-            for c in loaded_clips:
-                close_clip(c)
-            close_clip(final_video)
         else:
             logger.info(f"concatenating {len(clip_files)} clips with ffmpeg")
             concat_video_clips_with_ffmpeg(
@@ -1048,16 +1145,15 @@ def combine_videos(
                 max_duration=audio_duration,
             )
     except Exception:
-        # 任何合并/编码异常都先清理已加载的 MoviePy clip 和已写出的临时片段，
-        # 避免失败任务留下句柄与 temp-clip-*.mp4 垃圾；异常继续上抛给调用方。
-        for loaded_clip in loaded_clips:
-            close_clip(loaded_clip)
-        if final_video is not None:
-            close_clip(final_video)
+        # 任何合并/编码异常都先清理中间分块文件与素材临时文件，避免失败任务
+        # 留下 mix-chunk-*.mp4 与 temp-clip-*.mp4 垃圾；clip 句柄由
+        # _mix_concat_group 的 finally 统一释放。异常继续上抛给调用方。
+        delete_files(intermediate_files)
         delete_files(clip_files)
         raise
 
     # clean temp files
+    delete_files(intermediate_files)
     delete_files(clip_files)
 
     if transition_times:
@@ -1753,6 +1849,7 @@ def generate_video(
                 threads=params.n_threads or 2,
                 logger=None,
                 fps=fps,
+                **_get_video_encode_args(),
             )
             os.replace(temp_output_file, output_file)
         except Exception:

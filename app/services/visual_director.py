@@ -21,11 +21,12 @@ from __future__ import annotations
 
 import re
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.services.agent_llm import AgentTracker, _llm_json
 from app.services.content_profile import ContentProfile
 from app.services.intelligence import ContentIntelligence
 
@@ -223,6 +224,146 @@ def _visual_intent_for(material_type: str, narration: str) -> str:
     return intent_map.get(material_type, f"visual for: {truncated}")
 
 
+def _scene_index_from_key(key: Any) -> Optional[int]:
+    """Accept numeric keys or ``scene_N`` labels from the LLM payload."""
+    if isinstance(key, int):
+        return key
+    if isinstance(key, str):
+        label = key.strip()
+        if label.isdigit():
+            return int(label)
+        if label.startswith("scene_") and label[len("scene_") :].isdigit():
+            return int(label[len("scene_") :])
+    return None
+
+
+def _parse_semantic_search_terms(
+    payload: Any, scene_count: int, limit: int
+) -> Dict[int, List[str]]:
+    """Validate an LLM payload into ``{scene_index: [term, ...]}``.
+
+    Drops junk entries (non-list values, unknown scene keys, empty tokens) so a
+    noisy model response still degrades to clean per-scene search terms.
+    """
+    result: Dict[int, List[str]] = {}
+    if not isinstance(payload, dict):
+        raise ValueError("semantic search terms payload is not a JSON object")
+    for key, value in payload.items():
+        index = _scene_index_from_key(key)
+        if index is None or not (0 <= index < scene_count):
+            continue
+        if not isinstance(value, list):
+            continue
+        terms: List[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            term = item.strip().strip('"').strip()
+            if len(term) >= 2 and term.lower() not in _FUNCTION_WORDS:
+                terms.append(term)
+        result[index] = terms[:limit]
+    return result
+
+
+def _semantic_search_terms_prompt(
+    scenes: List[Tuple[int, str, str, str]], limit: int = 3
+) -> str:
+    """Build one short prompt covering many scenes (one LLM call per batch)."""
+    scene_lines = []
+    for index, narration, visual_intent, material_type in scenes:
+        scene_lines.append(
+            f"Scene {index}\n"
+            f'  Narration: "{narration[:200]}"\n'
+            f"  Visual intent: {visual_intent}\n"
+            f"  Material type: {material_type}"
+        )
+    scene_block = "\n".join(scene_lines)
+    return (
+        "You turn narration into concrete stock-footage search phrases.\n"
+        "For every scene output up to "
+        f"{limit} short, concrete search phrases (2-6 words) that Pexels, "
+        "Pixabay, or Coverr would return good footage for. Describe what should "
+        "appear on screen (e.g. \"growing bar chart\", \"CEO pointing at rising "
+        "graph\"), never abstract concepts or generic words. Follow the visual "
+        "intent as the guide.\n"
+        "Reply with ONLY valid JSON mapping each scene number to a list of "
+        f'strings, e.g. {{"0": ["growing bar chart", "CEO pointing at graph"]}}\n'
+        f"\nScenes:\n{scene_block}"
+    )
+
+
+def _deterministic_terms_for_scenes(
+    scenes: List[Tuple[int, str, str, str]], limit: int = 3
+) -> Dict[int, List[str]]:
+    """Deterministic fallback search terms for a whole batch of scenes."""
+    return {
+        index: _significant_search_terms(narration, limit=limit)
+        for index, narration, _, _ in scenes
+    }
+
+
+def _semantic_search_terms_for_scenes(
+    scenes: List[Tuple[int, str, str, str]],
+    app_config=None,
+    tracker: Optional[AgentTracker] = None,
+    limit: int = 3,
+) -> Dict[int, List[str]]:
+    """One batched LLM call that returns search terms for ALL scenes.
+
+    A degraded circuit breaker or any LLM failure falls back to deterministic
+    terms per scene, so a dead provider never blocks scene planning.
+    """
+    if not scenes:
+        return {}
+    prompt = _semantic_search_terms_prompt(scenes, limit=limit)
+    try:
+        payload = _llm_json(
+            prompt,
+            fallback=lambda: _deterministic_terms_for_scenes(scenes, limit=limit),
+            app_config=app_config,
+            tracker=tracker,
+            agent="scene_search_terms",
+        )
+    except Exception:  # noqa: BLE001 - degrade to deterministic on any failure
+        logger.warning("semantic search terms llm call failed, using deterministic terms")
+        payload = _deterministic_terms_for_scenes(scenes, limit=limit)
+    try:
+        parsed = _parse_semantic_search_terms(payload, scene_count=len(scenes), limit=limit)
+    except ValueError:
+        logger.warning("semantic search terms payload invalid, using deterministic terms")
+        parsed = _deterministic_terms_for_scenes(scenes, limit=limit)
+    # Per-scene fallback: a scene missing from the payload (or emptied by
+    # validation) still gets usable deterministic terms.
+    for index, narration, _, _ in scenes:
+        if not parsed.get(index):
+            parsed[index] = _significant_search_terms(narration, limit=limit)
+    return parsed
+
+
+def _generate_semantic_search_terms(
+    narration: str,
+    visual_intent: str,
+    material_type: str,
+    limit: int = 3,
+    app_config=None,
+    tracker: Optional[AgentTracker] = None,
+) -> List[str]:
+    """LLM-generated footage-searchable terms for a single scene.
+
+    Degraded tracker or any LLM failure falls back to the deterministic
+    baseline ``_significant_search_terms``, preserving the ``List[str]``
+    contract in every path. Prefer ``_semantic_search_terms_for_scenes`` when
+    planning many scenes: one batched LLM call is much cheaper than one here.
+    """
+    terms = _semantic_search_terms_for_scenes(
+        [(0, narration, visual_intent, material_type)],
+        app_config=app_config,
+        tracker=tracker,
+        limit=limit,
+    )
+    return terms[0] if terms else []
+
+
 def _scene_purpose(index: int, total: int) -> str:
     """Assign a narrative job per scene position (hook/context/evidence/payoff)."""
     if index == 0:
@@ -268,11 +409,16 @@ def plan_scenes(
     ai_image_budget_ratio: float = DEFAULT_AI_IMAGE_BUDGET_RATIO,
     platform: str = "",
     desired_scene_count: Optional[int] = None,
+    app_config=None,
+    tracker: Optional[AgentTracker] = None,
 ) -> ScenePlan:
     """Build the scene-by-scene visual plan for a script.
 
-    Deterministic. AI-generated imagery is strictly budgeted: the plan can
-    never produce an AI image for every scene.
+    Scene classification is deterministic; search terms are LLM-enhanced when
+    an ``app_config`` is in scope (one batched call for all scenes, degraded or
+    failed LLM falls back to deterministic term extraction). AI-generated
+    imagery is strictly budgeted: the plan can never produce an AI image for
+    every scene.
     """
     chunks = _split_scenes(script, desired_scene_count or 8)
     budget = min(
@@ -281,13 +427,10 @@ def plan_scenes(
     )
     style_language = (intelligence.visual_language if intelligence else "") or profile.visual_style or "clear, relevant visuals"
 
-    scenes: List[SceneVisual] = []
+    # First pass: classify each chunk's material type (with AI budget caps) and
+    # record the visual intent that the search-term stage must honor.
+    scene_rows: List[Tuple[int, str, str, str]] = []
     ai_used = 0
-    subject_keys: Dict[str, int] = {}
-    location_keys: Dict[str, int] = {}
-    used_search_terms: set[str] = set()
-    continuity_notes: List[str] = []
-
     for index, chunk in enumerate(chunks):
         material_type = _classify_material_type(chunk)
         # Budget enforcement: excess AI images downgrade to B-roll.
@@ -296,8 +439,27 @@ def plan_scenes(
                 ai_used += 1
             else:
                 material_type = MaterialType.B_ROLL.value
+        scene_rows.append(
+            (index, chunk, _visual_intent_for(material_type, chunk), material_type)
+        )
 
-        terms = _significant_search_terms(chunk)
+    # Search terms: one batched semantic call for ALL scenes when an LLM config
+    # is in scope; otherwise each scene uses the deterministic extraction.
+    if app_config:
+        terms_by_scene = _semantic_search_terms_for_scenes(
+            scene_rows, app_config=app_config, tracker=tracker, limit=3
+        )
+    else:
+        terms_by_scene = _deterministic_terms_for_scenes(scene_rows, limit=3)
+
+    scenes: List[SceneVisual] = []
+    subject_keys: Dict[str, int] = {}
+    location_keys: Dict[str, int] = {}
+    used_search_terms: set[str] = set()
+    continuity_notes: List[str] = []
+
+    for index, chunk, visual_intent, material_type in scene_rows:
+        terms = terms_by_scene[index]
         # Avoid repeating the exact same search terms across consecutive scenes.
         unique_terms: List[str] = []
         for term in terms:
@@ -318,7 +480,7 @@ def plan_scenes(
             narration=chunk[:400],
             purpose=_scene_purpose(index, len(chunks)),
             material_type=material_type,
-            visual_intent=_visual_intent_for(material_type, chunk),
+            visual_intent=visual_intent,
             search_terms=unique_terms,
             rationale=_material_rationale(chunk, material_type),
             subject_key=subject_key,

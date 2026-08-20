@@ -94,6 +94,11 @@ redis_db = 0
 redis_password = ""
 max_concurrent_tasks = 5
 max_queued_tasks = 100
+# 视频编码质量：preset 控制编码速度/体积权衡（ultrafast..veryslow），
+# crf 控制质量（越小越清晰，18-23 典型），video_bitrate 可选覆盖码率。
+video_preset = "medium"
+video_crf = 23
+video_bitrate = ""
 upload_post_enabled = false
 upload_post_api_key = ""
 upload_post_username = ""
