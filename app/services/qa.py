@@ -200,11 +200,35 @@ def _check_script(
 
 _NUM_PERCENT_RE = re.compile(r"(?<![\w$])(\d{1,3}(?:[.,]\d+)?)\s*%")
 _NUM_PERCENT_WORD_RE = re.compile(r"(?<![\w$])(\d{1,3}(?:[.,]\d+)?)\s*percent", re.IGNORECASE)
-_NUM_CURRENCY_RE = re.compile(r"\$(\d[\d.,]*)\s*(million|billion|trillion|thousand)?", re.IGNORECASE)
+_NUM_CURRENCY_RE = re.compile(
+    r"\$(\d[\d.,]*)\s*(million|billion|trillion|thousand|m|b|bn|t|tn|k)?", re.IGNORECASE
+)
 _NUM_WORD_UNIT_RE = re.compile(r"(?<![\w$])(\d[\d.,]*)\s*(million|billion|trillion|thousand)", re.IGNORECASE)
+_NUM_ABBREV_UNIT_RE = re.compile(r"(?<![\w$])\b(\d[\d.,]*)\s*(m|b|bn|t|tn|k)\b", re.IGNORECASE)
 _NUM_BARE_RE = re.compile(r"(?<![\w$%.])\b(\d{1,3}(?:,\d{3})+|\d{4,})\b")
 _YEAR_RE = re.compile(r"\b(?:1[0-9]{3}|2[0-9]{3})\b")
-_UNIT_SCALE = {"thousand": 1e3, "million": 1e6, "billion": 1e9, "trillion": 1e12}
+_UNIT_SCALE = {
+    "thousand": 1e3,
+    "k": 1e3,
+    "million": 1e6,
+    "m": 1e6,
+    "mn": 1e6,
+    "billion": 1e9,
+    "b": 1e9,
+    "bn": 1e9,
+    "trillion": 1e12,
+    "t": 1e12,
+    "tn": 1e12,
+}
+_UNIT_FULL_NAME = {
+    "k": "thousand",
+    "m": "million",
+    "mn": "million",
+    "b": "billion",
+    "bn": "billion",
+    "t": "trillion",
+    "tn": "trillion",
+}
 
 
 def _fmt_num(value: float) -> str:
@@ -253,13 +277,21 @@ def _extract_numbers(text: str) -> List[Dict[str, Any]]:
         _add(f"{_fmt_num(float(m.group(1)))}%", float(m.group(1)), "percent", "")
     for m in _NUM_CURRENCY_RE.finditer(text):
         raw = m.group(1)
-        unit = (m.group(2) or "").lower()
-        display = f"${raw}" if not unit else f"${raw} {unit}"
+        raw_unit = m.group(2) or ""
+        unit = raw_unit.lower()
+        if unit in _UNIT_FULL_NAME:
+            display = f"${raw}{raw_unit}"
+        else:
+            display = f"${raw}" if not unit else f"${raw} {raw_unit}"
         _add(display, float(raw.replace(",", "")), "currency", unit)
     for m in _NUM_WORD_UNIT_RE.finditer(text):
         raw = m.group(1)
         unit = m.group(2).lower()
         _add(f"{raw} {unit}", float(raw.replace(",", "")), "amount", unit)
+    for m in _NUM_ABBREV_UNIT_RE.finditer(text):
+        raw = m.group(1)
+        unit = m.group(2).lower()
+        _add(f"{raw}{unit}", float(raw.replace(",", "")), "amount", unit)
     for m in _NUM_BARE_RE.finditer(text):
         raw = m.group(1)
         if "," not in raw and len(raw) == 4 and _YEAR_RE.match(raw):
@@ -286,7 +318,7 @@ def _match_variants(claim: Dict[str, Any]) -> set:
         s = _fmt_num(value)
         variants.update([f"{s}%", f"{s} %", f"{s} percent", f"{iv}%", f"{iv:,}%", f"{iv} percent"])
     if unit:
-        u = unit
+        u = _UNIT_FULL_NAME.get(unit, unit)
         s = _fmt_num(value)
         variants.update([f"{s} {u}", f"{s}{u}", f"{iv} {u}", f"{iv}{u}", f"{iv:,} {u}", f"${s} {u}", f"${s}{u}"])
         if u == "billion":
@@ -298,20 +330,59 @@ def _match_variants(claim: Dict[str, Any]) -> set:
     return variants
 
 
+def _exact_value_backing(
+    claim: Dict[str, Any], research_numbers: List[Dict[str, Any]]
+) -> bool:
+    """Numeric-value match independent of spelling ("300M" vs
+    "300 million" vs "300,000,000" are the same fact)."""
+    kind_class = "percent" if claim["kind"] == "percent" else "other"
+    for r in research_numbers:
+        r_class = "percent" if r["kind"] == "percent" else "other"
+        if r_class == kind_class and abs(r["value"] - claim["value"]) < 1e-6:
+            return True
+    return False
+
+
 def _contradicting_research(
     claim: Dict[str, Any], research_numbers: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:
-    """Research figures near the script's number but not equal to it."""
+    """Research figures near the script's number but not equal to it.
+
+    A floor guards against rounding noise: a 1-point percentage difference
+    (30% vs 31%) is the same fact restated, not a contradiction.
+    """
     if claim["kind"] == "percent":
         band = 25.0
+        floor = 2.0
         candidates = [r for r in research_numbers if r["kind"] == "percent"]
     else:
         band = 0.25 * max(claim["value"], 1.0)
+        floor = 0.10 * max(claim["value"], 1.0)
         candidates = [r for r in research_numbers if r["kind"] != "percent"]
     return [
         r
         for r in candidates
-        if r["value"] != claim["value"] and abs(r["value"] - claim["value"]) <= band
+        if r["value"] != claim["value"]
+        and abs(r["value"] - claim["value"]) >= floor
+        and abs(r["value"] - claim["value"]) <= band
+    ]
+
+
+def _near_missing_research(
+    claim: Dict[str, Any], research_numbers: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Research figures close enough to the script's number that the
+    difference is best explained by rounding rather than a real conflict."""
+    if claim["kind"] == "percent":
+        floor = 2.0
+        candidates = [r for r in research_numbers if r["kind"] == "percent"]
+    else:
+        floor = 0.10 * max(claim["value"], 1.0)
+        candidates = [r for r in research_numbers if r["kind"] != "percent"]
+    return [
+        r
+        for r in candidates
+        if r["value"] != claim["value"] and 0 < abs(r["value"] - claim["value"]) < floor
     ]
 
 
@@ -349,6 +420,8 @@ def _check_script_claims_against_research(
     for claim in script_numbers:
         if any(v in blob for v in _match_variants(claim)):
             continue
+        if _exact_value_backing(claim, research_numbers):
+            continue
         conflicts = _contradicting_research(claim, research_numbers)
         if conflicts:
             _add(
@@ -357,6 +430,14 @@ def _check_script_claims_against_research(
                 "script",
                 f"script claims {claim['display']} but research reports a conflicting figure",
                 evidence=f"research mentions {conflicts[0]['display']}",
+            )
+        elif _near_missing_research(claim, research_numbers):
+            _add(
+                report,
+                QaSeverity.INFO.value,
+                "script",
+                f"script claims {claim['display']}, research reports a nearby figure",
+                evidence="difference is within rounding tolerance",
             )
         else:
             _add(

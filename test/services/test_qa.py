@@ -213,6 +213,89 @@ class TestQaEngine(unittest.TestCase):
             )
         )
 
+    def test_percent_rounding_difference_is_info_not_error(self):
+        report = run_quality_assurance(
+            "Revenue grew 30% last year.",
+            self.profile,
+            research_claims=[
+                ResearchClaim(statement="Revenue grew 31 percent in 2023", status=ClaimStatus.VERIFIED)
+            ],
+            selected_title=_Title("Growth update", 9.0),
+        )
+        self.assertFalse(
+            any(issue.severity == QaSeverity.ERROR.value for issue in report.issues)
+        )
+        self.assertTrue(
+            any(
+                issue.severity == QaSeverity.INFO.value
+                and "rounding tolerance" in issue.evidence
+                for issue in report.issues
+            )
+        )
+
+    def test_amount_rounding_difference_is_info_not_error(self):
+        report = run_quality_assurance(
+            "The market reached $5 billion.",
+            self.profile,
+            research_claims=[
+                ResearchClaim(statement="The market reached $5.1 billion", status=ClaimStatus.VERIFIED)
+            ],
+            selected_title=_Title("Market update", 9.0),
+        )
+        self.assertFalse(
+            any(issue.severity == QaSeverity.ERROR.value for issue in report.issues)
+        )
+
+    def test_abbreviated_currency_claim_is_extracted(self):
+        report = run_quality_assurance(
+            "The deal was worth $5B.",
+            self.profile,
+            research_claims=None,
+            selected_title=_Title("Deal update", 9.0),
+        )
+        self.assertTrue(
+            any("$5B" in issue.evidence for issue in report.issues)
+        )
+
+    def test_abbreviated_currency_claim_matches_research(self):
+        report = run_quality_assurance(
+            "The deal was worth $5B.",
+            self.profile,
+            research_claims=[
+                ResearchClaim(statement="The deal was valued at $5 billion", status=ClaimStatus.VERIFIED)
+            ],
+            selected_title=_Title("Deal update", 9.0),
+        )
+        self.assertFalse(any("script claims" in issue.message for issue in report.issues))
+
+    def test_abbreviated_amount_claim_matches_research(self):
+        report = run_quality_assurance(
+            "The platform reached 300M users.",
+            self.profile,
+            research_claims=[
+                ResearchClaim(statement="The platform reached 300 million users", status=ClaimStatus.VERIFIED)
+            ],
+            selected_title=_Title("Platform update", 9.0),
+        )
+        self.assertFalse(any("script claims" in issue.message for issue in report.issues))
+
+    def test_abbreviated_amount_claim_warns_when_unbacked(self):
+        report = run_quality_assurance(
+            "The platform reached 300M users.",
+            self.profile,
+            research_claims=[
+                ResearchClaim(statement="The platform grew steadily", status=ClaimStatus.VERIFIED)
+            ],
+            selected_title=_Title("Platform update", 9.0),
+        )
+        self.assertTrue(
+            any(
+                issue.severity == QaSeverity.WARNING.value
+                and "script claims 300m" in issue.message
+                for issue in report.issues
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
