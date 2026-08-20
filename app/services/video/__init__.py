@@ -247,6 +247,23 @@ def _get_temp_audio_dir(output_dir: str) -> str:
     return output_dir
 
 
+def _translate_encode_args(kwargs: dict, codec: str) -> dict:
+    """Map quality knobs onto ``write_videofile`` kwargs for a specific codec.
+
+    MoviePy's ``write_videofile`` accepts ``preset``/``bitrate`` but has no
+    ``crf`` kwarg; CRF must travel via ``ffmpeg_params``. Hardware encoders
+    (e.g. h264_nvenc) do not support ``-crf``, so it is dropped there and only
+    applied when encoding with libx264.
+    """
+    translated = dict(kwargs)
+    crf = translated.pop("crf", None)
+    if crf is not None and codec == _DEFAULT_VIDEO_CODEC:
+        params = list(translated.get("ffmpeg_params") or [])
+        params.extend(["-crf", str(crf)])
+        translated["ffmpeg_params"] = params
+    return translated
+
+
 def _fallback_write_videofile(
     clip, output_file: str, failed_codec: str, reason: str, **kwargs
 ):
@@ -257,7 +274,11 @@ def _fallback_write_videofile(
     文件被占用、目录权限、杀软拦截等通用 IO 问题。只有 libx264 能成功写出时，
     才能判断原始失败大概率来自硬件编码器本身，避免误伤后续任务。
     """
-    clip.write_videofile(output_file, codec=_DEFAULT_VIDEO_CODEC, **kwargs)
+    clip.write_videofile(
+        output_file,
+        codec=_DEFAULT_VIDEO_CODEC,
+        **_translate_encode_args(kwargs, _DEFAULT_VIDEO_CODEC),
+    )
     _disable_runtime_video_codec(failed_codec, reason)
     return _DEFAULT_VIDEO_CODEC
 
@@ -271,7 +292,11 @@ def _write_videofile_with_codec_fallback(clip, output_file: str, codec: str, **k
     """
     effective_codec = _get_effective_video_codec(codec)
     try:
-        clip.write_videofile(output_file, codec=effective_codec, **kwargs)
+        clip.write_videofile(
+            output_file,
+            codec=effective_codec,
+            **_translate_encode_args(kwargs, effective_codec),
+        )
         return effective_codec
     except Exception as exc:
         if effective_codec == _DEFAULT_VIDEO_CODEC:

@@ -642,6 +642,107 @@ class TestVideoService(unittest.TestCase):
 
         self.assertNotIn("h264_nvenc", vd._runtime_disabled_video_codecs)
 
+    def test_write_videofile_passes_crf_via_ffmpeg_params_for_libx264(self):
+        """
+        MoviePy 2.x 的 write_videofile 没有 crf 参数，crf 必须通过
+        ffmpeg_params 传给 libx264，否则会 TypeError。
+        """
+
+        class _FakeClip:
+            def __init__(self):
+                self.calls = []
+
+            def write_videofile(self, output_file, codec, **kwargs):
+                self.calls.append((codec, kwargs))
+
+        fake_clip = _FakeClip()
+        vd._write_videofile_with_codec_fallback(
+            fake_clip,
+            "/tmp/fake.mp4",
+            codec="libx264",
+            logger=None,
+            fps=30,
+            preset="medium",
+            crf=23,
+            bitrate="2M",
+        )
+
+        codec, kwargs = fake_clip.calls[0]
+        self.assertEqual(codec, "libx264")
+        self.assertEqual(kwargs["preset"], "medium")
+        self.assertEqual(kwargs["bitrate"], "2M")
+        self.assertNotIn("crf", kwargs)
+        self.assertIn("-crf", kwargs["ffmpeg_params"])
+        self.assertIn("23", kwargs["ffmpeg_params"])
+
+    def test_write_videofile_drops_crf_for_hardware_encoder(self):
+        """
+        h264_nvenc 不支持 -crf，质量参数只保留 preset/bitrate；crf 不能
+        出现在 ffmpeg_params 中，否则 ffmpeg 报错。
+        """
+
+        class _FakeClip:
+            def __init__(self):
+                self.calls = []
+
+            def write_videofile(self, output_file, codec, **kwargs):
+                self.calls.append((codec, kwargs))
+
+        fake_clip = _FakeClip()
+        with patch.object(vd, "_ffmpeg_encoder_exists", return_value=True):
+            vd._write_videofile_with_codec_fallback(
+                fake_clip,
+                "/tmp/fake.mp4",
+                codec="h264_nvenc",
+                logger=None,
+                fps=30,
+                preset="medium",
+                crf=23,
+                bitrate="2M",
+            )
+
+        codec, kwargs = fake_clip.calls[0]
+        self.assertEqual(codec, "h264_nvenc")
+        self.assertEqual(kwargs["preset"], "medium")
+        self.assertEqual(kwargs["bitrate"], "2M")
+        self.assertNotIn("crf", kwargs)
+        self.assertNotIn("ffmpeg_params", kwargs)
+
+    def test_write_videofile_fallback_retains_crf_for_libx264_retry(self):
+        """
+        硬件编码失败回退到 libx264 时，crf 应重新翻译进 ffmpeg_params，
+        而不是从原 kwargs 里丢失。
+        """
+
+        class _FakeClip:
+            def __init__(self):
+                self.calls = []
+
+            def write_videofile(self, output_file, codec, **kwargs):
+                self.calls.append((codec, kwargs))
+                if codec == "h264_nvenc":
+                    raise RuntimeError("nvenc device not available")
+
+        fake_clip = _FakeClip()
+        with patch.object(vd, "_ffmpeg_encoder_exists", return_value=True):
+            used_codec = vd._write_videofile_with_codec_fallback(
+                fake_clip,
+                "/tmp/fake.mp4",
+                codec="h264_nvenc",
+                logger=None,
+                fps=30,
+                preset="medium",
+                crf=23,
+            )
+
+        self.assertEqual(used_codec, "libx264")
+        self.assertEqual(fake_clip.calls[0][0], "h264_nvenc")
+        self.assertNotIn("ffmpeg_params", fake_clip.calls[0][1])
+        self.assertEqual(fake_clip.calls[1][0], "libx264")
+        self.assertEqual(fake_clip.calls[1][1]["preset"], "medium")
+        self.assertIn("-crf", fake_clip.calls[1][1]["ffmpeg_params"])
+        self.assertIn("23", fake_clip.calls[1][1]["ffmpeg_params"])
+
     def test_format_ffmpeg_concat_path_normalizes_windows_path(self):
         """
         concat demuxer 的文件列表对 Windows 反斜杠较敏感，写入 list 前统一
