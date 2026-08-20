@@ -26,6 +26,30 @@ _pending_config_flush_scheduled = False
 _MISSING = object()
 _DELETE = object()
 
+# 记录启动时从环境变量或系统凭据管理器解析出的“密钥类”配置项。
+# 这些值不应回写到 config.toml（避免把凭据管理器中的秘密以明文落盘）。
+# 格式为 (section, key) 的集合。
+_secret_sourced_keys: set[tuple[str, str]] = set()
+
+
+def _is_secret_key(key: str) -> bool:
+    """Return True if *key* holds a credential that should not be written to config.toml."""
+    return key.endswith("_key") or key.endswith("_keys") or key in (
+        "speech_key", "password", "api_key", "username",
+    )
+
+
+def _strip_secret_sourced_keys(config_to_save: dict):
+    """Blank out env/keyring-sourced secrets before serializing to config.toml."""
+    for section, key in _secret_sourced_keys:
+        section_dict = config_to_save.get(section)
+        if not isinstance(section_dict, dict):
+            continue
+        if key.endswith("_keys"):
+            section_dict[key] = []
+        else:
+            section_dict[key] = ""
+
 
 class _SynchronizedConfig(dict):
     """保持 dict 使用方式不变，同时让运行期配置写操作服从同一把锁。"""
@@ -568,11 +592,14 @@ def _apply_env_overrides(config: dict):
                 config.setdefault(section, {})[key] = int(value)
             else:
                 config.setdefault(section, {})[key] = value
+            if _is_secret_key(key):
+                _secret_sourced_keys.add((section, key))
 
     # Azure section
     azure = config.get("azure", {})
     if get_secret("AZURE_SPEECH_KEY"):
         azure["speech_key"] = get_secret("AZURE_SPEECH_KEY")
+        _secret_sourced_keys.add(("azure", "speech_key"))
     if get_secret("AZURE_SPEECH_REGION"):
         azure["speech_region"] = get_secret("AZURE_SPEECH_REGION")
     config["azure"] = azure
@@ -581,12 +608,14 @@ def _apply_env_overrides(config: dict):
     siliconflow = config.get("siliconflow", {})
     if get_secret("SILICONFLOW_API_KEY"):
         siliconflow["api_key"] = get_secret("SILICONFLOW_API_KEY")
+        _secret_sourced_keys.add(("siliconflow", "api_key"))
     config["siliconflow"] = siliconflow
 
     # Minimax TTS section
     minimax_tts = config.get("minimax_tts", {})
     if get_secret("MINIMAX_TTS_API_KEY"):
         minimax_tts["api_key"] = get_secret("MINIMAX_TTS_API_KEY")
+        _secret_sourced_keys.add(("minimax_tts", "api_key"))
     if get_secret("MINIMAX_TTS_BASE_URL"):
         minimax_tts["base_url"] = get_secret("MINIMAX_TTS_BASE_URL")
     if get_secret("MINIMAX_TTS_MODEL_ID"):
@@ -599,6 +628,7 @@ def _apply_env_overrides(config: dict):
     elevenlabs = config.get("elevenlabs", {})
     if get_secret("ELEVENLABS_API_KEY"):
         elevenlabs["api_key"] = get_secret("ELEVENLABS_API_KEY")
+        _secret_sourced_keys.add(("elevenlabs", "api_key"))
     if get_secret("ELEVENLABS_MODEL_ID"):
         elevenlabs["model_id"] = get_secret("ELEVENLABS_MODEL_ID")
     config["elevenlabs"] = elevenlabs
@@ -609,6 +639,7 @@ def _apply_env_overrides(config: dict):
         chatterbox["base_url"] = get_secret("CHATTERBOX_BASE_URL")
     if get_secret("CHATTERBOX_API_KEY"):
         chatterbox["api_key"] = get_secret("CHATTERBOX_API_KEY")
+        _secret_sourced_keys.add(("chatterbox", "api_key"))
     if get_secret("CHATTERBOX_MODEL_ID"):
         chatterbox["model_id"] = get_secret("CHATTERBOX_MODEL_ID")
     config["chatterbox"] = chatterbox
@@ -643,6 +674,8 @@ def _apply_env_overrides(config: dict):
                 research[key] = int(value)
             else:
                 research[key] = value
+            if _is_secret_key(key):
+                _secret_sourced_keys.add(("research", key))
     config["research"] = research
 
 
@@ -672,6 +705,9 @@ def save_config():
         config_to_save["chatterbox"] = dict(chatterbox)
         config_to_save["ui"] = dict(ui)
         config_to_save["research"] = dict(research)
+        # 不要把来自环境变量 / 系统凭据管理器的秘密回写到 config.toml。
+        # 启动时解析出的密钥保留在运行期配置中，但落盘时必须置空。
+        _strip_secret_sourced_keys(config_to_save)
         serialized_config = toml.dumps(config_to_save)
 
         # WebUI 完整 rerun 结束时会调用保存。内容没有变化时直接返回，避免每次

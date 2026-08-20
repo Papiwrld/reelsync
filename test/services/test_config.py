@@ -466,3 +466,89 @@ class TestConfigPersistence:
                     config.app.pop(key, None)
                 else:
                     config.app[key] = original_value
+
+
+class TestSecretSourcing:
+    @staticmethod
+    def _secret_only(values: dict):
+        """Return a get_secret side effect that yields *values* for named env vars only."""
+        def _lookup(env_var):
+            return values.get(env_var)
+        return _lookup
+
+    def setup_method(self):
+        config._secret_sourced_keys.clear()
+
+    def teardown_method(self):
+        config._secret_sourced_keys.clear()
+
+    def test_apply_env_overrides_reads_from_keyring_when_no_env_var(self):
+        config_dict = {"app": {}}
+        with patch(
+            "app.config.config.get_secret",
+            side_effect=self._secret_only({"OPENAI_API_KEY": "keyring-secret"}),
+        ):
+            config._apply_env_overrides(config_dict)
+        assert config_dict["app"]["openai_api_key"] == "keyring-secret"
+        assert ("app", "openai_api_key") in config._secret_sourced_keys
+
+    def test_apply_env_overrides_does_nothing_when_no_secret(self):
+        config_dict = {"app": {}}
+        with patch("app.config.config.get_secret", side_effect=self._secret_only({})):
+            config._apply_env_overrides(config_dict)
+        assert "openai_api_key" not in config_dict["app"]
+        assert ("app", "openai_api_key") not in config._secret_sourced_keys
+
+    def test_apply_env_boolean_coercion_from_keyring(self):
+        config_dict = {"app": {}}
+        with patch(
+            "app.config.config.get_secret",
+            side_effect=self._secret_only({"ENABLE_REDIS": "true"}),
+        ):
+            config._apply_env_overrides(config_dict)
+        assert config_dict["app"]["enable_redis"] is True
+
+    def test_apply_env_int_coercion_from_keyring(self):
+        config_dict = {"app": {}}
+        with patch(
+            "app.config.config.get_secret",
+            side_effect=self._secret_only({"MAX_CONCURRENT_TASKS": "5"}),
+        ):
+            config._apply_env_overrides(config_dict)
+        assert config_dict["app"]["max_concurrent_tasks"] == 5
+
+    def test_apply_env_list_splitting_from_keyring(self):
+        config_dict = {"app": {}}
+        with patch(
+            "app.config.config.get_secret",
+            side_effect=self._secret_only({"PEXELS_API_KEY": "key1, key2, key3"}),
+        ):
+            config._apply_env_overrides(config_dict)
+        assert config_dict["app"]["pexels_api_keys"] == ["key1", "key2", "key3"]
+
+    def test_save_config_strips_env_sourced_secrets_from_disk(self):
+        with TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            with (
+                patch.object(config, "root_dir", tmp),
+                patch.object(config, "config_file", str(config_path)),
+                patch.object(config, "_secret_sourced_keys", {("app", "openai_api_key")}),
+                patch.object(config, "app", {"openai_api_key": "secret-value", "llm_provider": "openai"}),
+            ):
+                config.save_config()
+            saved = tomllib.loads(config_path.read_text(encoding="utf-8"))
+            assert saved["app"]["openai_api_key"] == ""
+            assert saved["app"]["llm_provider"] == "openai"
+
+    def test_save_config_strips_list_secret_keys(self):
+        with TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            with (
+                patch.object(config, "root_dir", tmp),
+                patch.object(config, "config_file", str(config_path)),
+                patch.object(config, "_secret_sourced_keys", {("app", "pexels_api_keys")}),
+                patch.object(config, "app", {"pexels_api_keys": ["k1", "k2"]}),
+            ):
+                config.save_config()
+            saved = tomllib.loads(config_path.read_text(encoding="utf-8"))
+            assert saved["app"]["pexels_api_keys"] == []

@@ -14,6 +14,7 @@ from loguru import logger
 from app.config import config
 from app.services import bgm as bgm_service
 from app.utils import utils
+from app.utils.secrets import get_secret
 
 
 DEFAULT_BASE_URL = "https://api.sonilo.com"
@@ -33,7 +34,7 @@ class SoniloError(RuntimeError):
 def get_api_key() -> str:
     """优先读取 WebUI 保存的配置，未配置时允许使用环境变量。"""
     configured_key = str(config.app.get("sonilo_api_key", "") or "").strip()
-    return configured_key or os.getenv("SONILO_API_KEY", "").strip()
+    return configured_key or (get_secret("SONILO_API_KEY") or "").strip()
 
 
 def is_enabled() -> bool:

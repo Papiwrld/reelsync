@@ -27,6 +27,7 @@ from openai import OpenAI
 
 from app.config import config
 from app.utils import utils
+from app.utils.secrets import get_secret
 
 _DEFAULT_EDGE_TTS_TIMEOUT_SECONDS = 30.0
 _MIMO_DEFAULT_BASE_URL = "https://api.xiaomimimo.com/v1"
@@ -289,7 +290,7 @@ def get_elevenlabs_api_key() -> str:
     变量部署时，音色列表可正常加载，真正合成语音却会误报未配置 Key。
     """
     configured_key = str(config.elevenlabs.get("api_key", "") or "").strip()
-    return configured_key or os.getenv("ELEVENLABS_API_KEY", "").strip()
+    return configured_key or (get_secret("ELEVENLABS_API_KEY") or "").strip()
 
 
 def is_chatterbox_voice(voice_name: str) -> bool:
@@ -1363,7 +1364,8 @@ def get_minimax_tts_api_key() -> str:
     return str(
         config.minimax_tts.get("api_key", "")
         or config.app.get("minimax_api_key", "")
-        or os.getenv("MINIMAX_API_KEY", "")
+        or get_secret("MINIMAX_API_KEY")
+        or ""
         or ""
     ).strip()
 

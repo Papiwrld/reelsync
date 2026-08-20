@@ -59,6 +59,7 @@ from app.services import state as sm
 from app.services import task as tm
 from app.utils.logging_utils import configure_terminal_logger
 from app.utils import utils
+from app.utils.secrets import get_secret
 
 st.set_page_config(
     page_title="ReelSync",
@@ -4405,7 +4406,7 @@ def _sync_minimax_tts_api_key_input():
     widget_key = "minimax_tts_api_key_input"
     configured_key = str(config.minimax_tts.get("api_key", "") or "").strip()
     shared_key = str(
-        config.app.get("minimax_api_key", "") or os.getenv("MINIMAX_API_KEY", "") or ""
+        config.app.get("minimax_api_key", "") or get_secret("MINIMAX_API_KEY") or ""
     ).strip()
     effective_key = configured_key or shared_key
     had_widget_state = widget_key in st.session_state
@@ -4551,7 +4552,7 @@ def _sync_elevenlabs_api_key_input():
     """
     widget_key = "elevenlabs_api_key_input"
     configured_key = str(config.elevenlabs.get("api_key", "") or "").strip()
-    env_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    env_key = (get_secret("ELEVENLABS_API_KEY") or "").strip()
     effective_key = configured_key or env_key
     had_widget_state = widget_key in st.session_state
     entered_key = str(st.session_state.get(widget_key, "") or "").strip()
@@ -4616,7 +4617,7 @@ def _render_background_music_settings(params, elevenlabs_api_key_rendered=False)
     params.bgm_type = selected_bgm_type
     if params.bgm_type == "sonilo":
         configured_key = str(config.app.get("sonilo_api_key", "") or "").strip()
-        effective_key = configured_key or os.getenv("SONILO_API_KEY", "").strip()
+        effective_key = configured_key or (get_secret("SONILO_API_KEY") or "").strip()
         entered_key = st.text_input(
             tr("Sonilo API Key"),
             value=effective_key,

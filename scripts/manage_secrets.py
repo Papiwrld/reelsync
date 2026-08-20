@@ -2,7 +2,7 @@
 
 On Windows, secrets are stored in Credential Manager, encrypted by DPAPI and
 bound to the current Windows user. Secrets are resolved at startup in this
-order: OS credential manager -> environment variable -> config.toml.
+order: environment variable > OS credential manager > config.toml.
 
 Usage:
     python scripts/manage_secrets.py set OPENAI_API_KEY
@@ -76,11 +76,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
     set_p = subparsers.add_parser("set", help="store a secret (prompts on terminal)")
     set_p.add_argument("name", choices=sorted(_KNOWN_SECRETS), help="env-var name of the secret")
-    set_p.add_argument(
-        "--value",
-        default=None,
-        help="optional value; if omitted the value is read from a hidden prompt",
-    )
 
     get_p = subparsers.add_parser("get", help="print a stored secret to stdout")
     get_p.add_argument("name", help="env-var name of the secret")
@@ -104,9 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.command == "set":
-        value = args.value
-        if value is None:
-            value = getpass.getpass(f"{args.name}: ")
+        value = getpass.getpass(f"{args.name}: ")
         if not value:
             print("empty value ignored", file=sys.stderr)
             return 1
