@@ -175,6 +175,7 @@ class TestSearchVideosWebScrapeFallback(unittest.TestCase):
             patch.object(
                 ws.subprocess, "Popen", side_effect=[failed, succeeded]
             ),
+            patch.object(ws, "_search_videos_via_html_search", return_value=[]),
             patch.object(ws.logger, "warning") as warn,
         ):
             results = ws.search_videos_web_scrape(

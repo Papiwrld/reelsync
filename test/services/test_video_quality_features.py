@@ -141,9 +141,9 @@ class TestVideoConstants(unittest.TestCase):
         config.app["video_fps"] = 61
         self.assertEqual(vc.get_configured_video_fps(), 30)
 
-    def test_is_audio_loudnorm_enabled_defaults_false(self):
-        """未配置 loudnorm 时默认关闭，保持历史行为。"""
-        self.assertFalse(vc.is_audio_loudnorm_enabled())
+    def test_is_audio_loudnorm_enabled_defaults_true(self):
+        """未配置 loudnorm 时默认开启（-14 LUFS），保证混音不削波。"""
+        self.assertTrue(vc.is_audio_loudnorm_enabled())
 
     def test_is_audio_loudnorm_enabled_reads_config(self):
         config.app["audio_loudnorm"] = True
@@ -187,11 +187,11 @@ class TestVideoQualityIntegration(unittest.TestCase):
         self.assertTrue(vd._is_loudnorm_enabled(params))
 
     def test_is_loudnorm_enabled_falls_back_to_config(self):
-        """params 未显式设置时回退配置；配置也没有则关闭。"""
+        """params 未显式设置时回退配置；配置也没有则默认开启。"""
         params = VideoParams(video_subject="test")
-        self.assertFalse(vd._is_loudnorm_enabled(params))
-        config.app["audio_loudnorm"] = True
         self.assertTrue(vd._is_loudnorm_enabled(params))
+        config.app["audio_loudnorm"] = False
+        self.assertFalse(vd._is_loudnorm_enabled(params))
 
     def test_is_loudnorm_enabled_params_false_overrides_config(self):
         """显式 False 必须压过配置里的 True，不能因为配置开启而削波。"""
@@ -319,12 +319,13 @@ class TestVideoQualityIntegration(unittest.TestCase):
         )
 
     def test_generate_video_skips_loudnorm_when_disabled(self):
-        """loudnorm 默认关闭时既不调用 AudioNormalize，也不附加滤镜。"""
+        """loudnorm 显式关闭时既不调用 AudioNormalize，也不附加滤镜。"""
         params = VideoParams(
             video_subject="test",
             subtitle_enabled=False,
             bgm_type="random",
             bgm_volume=0.0,
+            audio_loudnorm=False,
         )
         with (
             tempfile.TemporaryDirectory() as temp_dir,

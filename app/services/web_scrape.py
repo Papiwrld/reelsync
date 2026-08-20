@@ -5,6 +5,7 @@ import re
 import signal
 import subprocess
 import sys
+import urllib.parse
 from typing import Any
 
 from loguru import logger
@@ -51,6 +52,119 @@ _MIN_MATERIAL_DIMENSION = 720
 # yt-dlp 中断时会留下 <output>.part、<output>.ytdl，以及分片下载产生的
 # <output>.f<id>.<ext>.part 等临时文件。统一按输出路径前缀清理。
 _PARTIAL_FILE_SUFFIXES = (".part", ".ytdl")
+
+# 多源网页搜索：yt-dlp 只原生支持 YouTube 搜索（ytsearch），TikTok/Instagram
+# 等平台没有 search 提取器。作为补充，用 DuckDuckGo HTML 视频搜索兜底，只要
+# 搜索引擎索引到的视频 URL（Youtube/TikTok/Instagram/Vimeo/Dailymotion 等）
+# 都可以经 yt-dlp 直接 URL 下载（1800+ 站点）。
+_HTML_SEARCH_TIMEOUT_SECONDS = 10
+_HTML_SEARCH_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+_VIDEO_HOST_SUFFIXES = (
+    "youtube.com",
+    "youtu.be",
+    "tiktok.com",
+    "instagram.com",
+    "reels",
+    "vimeo.com",
+    "dailymotion.com",
+    "facebook.com",
+    "fb.watch",
+    "x.com",
+    "twitter.com",
+    "twitch.tv",
+    "bilibili.com",
+    "dailymotion.com",
+    "rumble.com",
+    "bitchute.com",
+)
+
+
+def _is_video_host(url: str) -> bool:
+    """判断 URL 是否来自已知可下载视频站点。"""
+    try:
+        host = urllib.parse.urlparse(url).hostname or ""
+    except ValueError:
+        return False
+    host = host.lower()
+    return any(host == s or host.endswith("." + s) for s in _VIDEO_HOST_SUFFIXES)
+
+
+def _search_videos_via_html_search(
+    search_term: str,
+    video_aspect: str,
+    minimum_duration: float = 3,
+    platform: str = "youtube",
+) -> list[Any]:
+    """DuckDuckGo HTML 视频搜索兜底，返回候选 MaterialInfo。
+
+    yt-dlp 只支持 ytsearch（YouTube）。当平台是 TikTok/Instagram 或 ytsearch
+    无结果时，此函数通过搜索引擎找到任意站点的视频 URL，交给后续 yt-dlp
+    直接 URL 下载。纯 best-effort：任何失败都返回 []，绝不阻塞管线。
+    """
+    import requests
+
+    query = search_term
+    if platform == "tiktok":
+        query = f"{search_term} site:tiktok.com"
+    elif platform == "instagram":
+        query = f"{search_term} site:instagram.com"
+    try:
+        resp = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
+            headers={"User-Agent": _HTML_SEARCH_USER_AGENT},
+            timeout=_HTML_SEARCH_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+    except Exception as exc:  # noqa: BLE001 - best-effort fallback
+        logger.debug(f"html video search failed for {search_term!r}: {exc}")
+        return []
+
+    # DuckDuckGo 结果链接是重定向 URL，真实地址在 uddg= 参数里。
+    candidates: list[Any] = []
+    seen: set[str] = set()
+    for href in re.findall(r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"', resp.text):
+        if "uddg=" in href:
+            try:
+                parsed = urllib.parse.urlparse(href)
+                qs = urllib.parse.parse_qs(parsed.query)
+                url = (qs.get("uddg") or [""])[0]
+            except Exception:  # noqa: BLE001
+                continue
+        elif href.startswith("http"):
+            url = href
+        else:
+            continue
+        if not url or not url.startswith(("http://", "https://")):
+            continue
+        if not _is_video_host(url):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        candidates.append(
+            MaterialInfo(
+                provider="web_scrape",
+                url=url,
+                duration=minimum_duration,
+                resolution="",
+                source_info={
+                    "provider": "web_scrape",
+                    "search_term": search_term,
+                    "title": "",
+                    "description": "",
+                    "source": "html_video_search",
+                },
+            )
+        )
+    logger.info(
+        f"html video search found {len(candidates)} candidates for {search_term!r} "
+        f"(platform={platform})"
+    )
+    return candidates
 
 
 def _is_windows() -> bool:
@@ -483,6 +597,20 @@ def search_videos_web_scrape(
     # Highly intelligent re-ranking: keep top-5 most scene-relevant
     if results:
         results = _rank_web_results_by_relevance(results, search_term, top_k=5)
+
+    # 多源补充：yt-dlp 只支持 YouTube 搜索。TikTok/Instagram 平台或 ytsearch
+    # 无结果时，用 DuckDuckGo HTML 视频搜索找其他站点的视频 URL（下载阶段
+    # 由 yt-dlp 直接 URL 处理，支持 1800+ 站点）。纯补充，失败不影响已有结果。
+    if not results or platform in ("tiktok", "instagram"):
+        extra = _search_videos_via_html_search(
+            search_term, video_aspect, minimum_duration, platform
+        )
+        if extra:
+            seen_urls = {r.url for r in results}
+            extra = [r for r in extra if r.url not in seen_urls]
+            if extra:
+                results.extend(extra)
+                results = _rank_web_results_by_relevance(results, search_term, top_k=5)
 
     return results
 

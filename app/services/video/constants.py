@@ -59,7 +59,7 @@ def is_audio_loudnorm_enabled() -> bool:
     try:
         from app.config import config as _cfg
 
-        raw = _cfg.app.get("audio_loudnorm", False)
+        raw = _cfg.app.get("audio_loudnorm", True)
         if isinstance(raw, str):
             return raw.strip().lower() in ("true", "1", "yes", "on")
         return bool(raw)

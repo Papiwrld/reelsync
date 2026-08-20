@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from app.services import web_scrape as ws
 
@@ -314,7 +314,10 @@ class TestSearchWebScrapeAspectGate(unittest.TestCase):
             def communicate(self, timeout=None):
                 return ("\n".join(payloads), "")
 
-        with patch.object(ws.subprocess, "Popen", return_value=_Popen()):
+        with (
+            patch.object(ws.subprocess, "Popen", return_value=_Popen()),
+            patch.object(ws, "_search_videos_via_html_search", return_value=[]),
+        ):
             return ws.search_videos_web_scrape("cats", 5, ws.VideoAspect.portrait)
 
     def _payload(self, url="https://youtube.com/watch?v=1", width=720, height=1280):
@@ -384,6 +387,121 @@ class TestSearchWebScrapeAspectGate(unittest.TestCase):
         with patch.object(ws.subprocess, "Popen", return_value=_Popen()):
             results = ws.search_videos_web_scrape("cats", 5, ws.VideoAspect.square)
         self.assertEqual([r.url for r in results], ["sq"])
+
+
+class TestIsVideoHost(unittest.TestCase):
+    """_is_video_host 判断 URL 是否来自已知可下载视频站点。"""
+
+    def test_known_hosts_accepted(self):
+        self.assertTrue(ws._is_video_host("https://www.youtube.com/watch?v=abc"))
+        self.assertTrue(ws._is_video_host("https://youtu.be/abc"))
+        self.assertTrue(ws._is_video_host("https://www.tiktok.com/@user/video/123"))
+        self.assertTrue(ws._is_video_host("https://www.instagram.com/reel/abc"))
+        self.assertTrue(ws._is_video_host("https://vimeo.com/123456"))
+        self.assertTrue(ws._is_video_host("https://dailymotion.com/video/abc"))
+        self.assertTrue(ws._is_video_host("https://fb.watch/abc"))
+        self.assertTrue(ws._is_video_host("https://x.com/user/status/123"))
+
+    def test_unknown_host_rejected(self):
+        self.assertFalse(ws._is_video_host("https://example.com/video.mp4"))
+        self.assertFalse(ws._is_video_host("https://someblog.com/posts/1"))
+        self.assertFalse(ws._is_video_host(""))
+
+
+class TestSearchVideosViaHtmlSearch(unittest.TestCase):
+    """_search_videos_via_html_search 的 DuckDuckGo HTML 兜底搜索。"""
+
+    def _mock_response(self, html: str):
+        """返回一个模拟 requests.Response。"""
+        mock = MagicMock()
+        mock.text = html
+        mock.raise_for_status = MagicMock()
+        return mock
+
+    def test_returns_empty_when_request_fails(self):
+        with patch("requests.get", side_effect=Exception("net error")):
+            result = ws._search_videos_via_html_search("test", "portrait", 3, "youtube")
+        self.assertEqual(result, [])
+
+    def test_parses_duckduckgo_redirect_links(self):
+        """DuckDuckGo 结果的 uddg 重定向 URL 应被正确解析。"""
+        html = """<html><body>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc123&amp;rut=abc">title</a>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.tiktok.com%2F%40user%2Fvideo%2F456&amp;rut=def">tiktok</a>
+        </body></html>"""
+        mock_resp = self._mock_response(html)
+        with patch("requests.get", return_value=mock_resp):
+            result = ws._search_videos_via_html_search("test", "portrait", 3, "youtube")
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].url, "https://www.youtube.com/watch?v=abc123")
+        self.assertEqual(result[1].url, "https://www.tiktok.com/@user/video/456")
+
+    def test_filters_non_video_hosts(self):
+        """非白名单站点（如 blog）应被过滤。"""
+        html = """<html><body>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.blog.com%2Fpost&amp;rut=a">blog</a>
+        </body></html>"""
+        mock_resp = self._mock_response(html)
+        with patch("requests.get", return_value=mock_resp):
+            result = ws._search_videos_via_html_search("test", "portrait", 3, "youtube")
+        self.assertEqual(result, [])
+
+    def test_platform_tiktok_adds_site_filter(self):
+        """platform='tiktok' 时请求参数应包含 site:tiktok.com。"""
+        html = """<html><body>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.tiktok.com%2F%40user%2Fvideo%2F1&amp;rut=a">tiktok</a>
+        </body></html>"""
+        mock_resp = self._mock_response(html)
+        with patch("requests.get", return_value=mock_resp) as mock_get:
+            result = ws._search_videos_via_html_search("dance", "portrait", 3, "tiktok")
+        self.assertEqual(len(result), 1)
+        call_kwargs = mock_get.call_args.kwargs
+        self.assertIn("site:tiktok.com", call_kwargs["params"]["q"])
+
+    def test_deduplicates_urls(self):
+        """重复 URL 应被去重。"""
+        html = """<html><body>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Da&amp;rut=1">a</a>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Da&amp;rut=2">a dup</a>
+        </body></html>"""
+        mock_resp = self._mock_response(html)
+        with patch("requests.get", return_value=mock_resp):
+            result = ws._search_videos_via_html_search("test", "portrait", 3, "youtube")
+        self.assertEqual(len(result), 1)
+
+
+class TestHtmlSearchIntegration(unittest.TestCase):
+    """search_videos_web_scrape 的多源补充：yt-dlp 无结果时触发 HTML 搜索。"""
+
+    def test_html_fallback_fills_empty_results(self):
+        """yt-dlp 无结果且 platform 非 youtube 时，HTML 搜索补充结果。"""
+        # yt-dlp 返回空 stdout
+        class _EmptyPopen:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def communicate(self, timeout=None):
+                return ("", "")
+
+            def poll(self):
+                return None
+
+        # HTML 搜索返回一个候选
+        html_candidate = ws.MaterialInfo(
+            provider="web_scrape",
+            url="https://www.tiktok.com/@user/video/123",
+            duration=3,
+            source_info={"provider": "web_scrape", "search_term": "dance", "source": "html_video_search"},
+        )
+
+        with (
+            patch.object(ws.subprocess, "Popen", return_value=_EmptyPopen()),
+            patch.object(ws, "_search_videos_via_html_search", return_value=[html_candidate]),
+            patch.object(ws, "_rank_web_results_by_relevance", side_effect=lambda r, *_a, **_kw: r),
+        ):
+            results = ws.search_videos_web_scrape("dance", 5, ws.VideoAspect.portrait)
+
+        self.assertIn("https://www.tiktok.com/@user/video/123", [r.url for r in results])
 
 
 if __name__ == "__main__":

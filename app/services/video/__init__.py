@@ -145,12 +145,12 @@ def _is_loudnorm_enabled(params: VideoParams | None = None) -> bool:
         except Exception:
             pass
     try:
-        raw = config.app.get("audio_loudnorm", False)
+        raw = config.app.get("audio_loudnorm", True)
         if isinstance(raw, str):
             return raw.strip().lower() in ("true", "1", "yes", "on")
         return bool(raw)
     except Exception:
-        return False
+        return True
 
 
 def _get_subtitle_engine(params: VideoParams | None = None) -> str:
