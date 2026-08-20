@@ -20,6 +20,60 @@ audio_codec = "aac"
 audio_bitrate = "192k"
 fps = 30
 
+# -- Configurable FPS / loudnorm (Gap 2 & Gap 1) ---------------------------
+# fps 固定 30 会让高刷/低刷需求无法配置；改为从 config 读取并做 24-60 校验。
+# 保留 ``fps`` 常量以兼容旧调用方，新代码应通过 ``get_configured_video_fps`` 获取。
+_VIDEO_FPS_DEFAULT = 30
+_VIDEO_FPS_MIN = 24
+_VIDEO_FPS_MAX = 60
+
+# 默认响度目标：EBU R128 -14 LUFS，TP -1 dB，LRA 11 LU（YouTube/Spotify 常用）
+_AUDIO_LOUDNORM_I = "-14"
+_AUDIO_LOUDNORM_TP = "-1"
+_AUDIO_LOUDNORM_LRA = "11"
+
+
+def _validate_video_fps(value) -> int:
+    """Validate raw fps to 24-60, fallback to default."""
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return _VIDEO_FPS_DEFAULT
+    if v < _VIDEO_FPS_MIN or v > _VIDEO_FPS_MAX:
+        return _VIDEO_FPS_DEFAULT
+    return v
+
+
+def get_configured_video_fps() -> int:
+    """Read ``video_fps`` from config with 24-60 validation."""
+    try:
+        from app.config import config as _cfg
+
+        return _validate_video_fps(_cfg.app.get("video_fps", _VIDEO_FPS_DEFAULT))
+    except Exception:
+        return _VIDEO_FPS_DEFAULT
+
+
+def is_audio_loudnorm_enabled() -> bool:
+    """Whether loudness normalization is enabled via config."""
+    try:
+        from app.config import config as _cfg
+
+        raw = _cfg.app.get("audio_loudnorm", False)
+        if isinstance(raw, str):
+            return raw.strip().lower() in ("true", "1", "yes", "on")
+        return bool(raw)
+    except Exception:
+        return False
+
+
+def get_audio_loudnorm_ffmpeg_params() -> list[str]:
+    """Return ffmpeg loudnorm filter params for -14 LUFS."""
+    return [
+        "-filter:a",
+        f"loudnorm=I={_AUDIO_LOUDNORM_I}:TP={_AUDIO_LOUDNORM_TP}:LRA={_AUDIO_LOUDNORM_LRA}",
+    ]
+
 # FFmpeg 按帧率拼接/转码时，最终时长可能比 MoviePy 读到的理论时长短几十毫秒。
 # 这里给视频素材多留一个很小的安全余量，避免音频末尾因为帧舍入出现黑屏、
 # 卡顿或最后一小段旁白没有画面的情况。

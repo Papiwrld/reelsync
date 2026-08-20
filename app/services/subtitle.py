@@ -14,9 +14,58 @@ from loguru import logger
 from app.config import config
 from app.utils import utils
 
-model_size = config.whisper.get("model_size", "medium")
-device = config.whisper.get("device", "cpu")
-compute_type = config.whisper.get("compute_type", "int8")
+
+def _is_cuda_available() -> bool:
+    """Check whether CUDA is available for Whisper (torch preferred)."""
+    try:
+        import torch  # type: ignore
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _resolve_whisper_device(raw) -> str:
+    raw_str = str(raw or "auto").strip().lower()
+    if raw_str == "auto":
+        return "cuda" if _is_cuda_available() else "cpu"
+    if raw_str in ("cuda", "gpu", "cuda:0"):
+        if _is_cuda_available():
+            return "cuda"
+        logger.warning(
+            f"whisper device '{raw}' requested but CUDA not available, fallback to cpu"
+        )
+        return "cpu"
+    return "cpu"
+
+
+def _resolve_whisper_model_size(raw, _device: str) -> str:
+    raw_str = str(raw or "").strip()
+    if not raw_str:
+        return "large-v3-turbo"
+    normalized = raw_str.lower().replace("_", "-")
+    if normalized in (
+        "whisper-large-v3-turbo",
+        "large-v3-turbo",
+        "large-v3-turbo-int8",
+    ):
+        return "large-v3-turbo"
+    if normalized == "whisper-large-v3-turbo-ct2":
+        return "large-v3-turbo"
+    return raw_str
+
+
+_raw_device = config.whisper.get("device", "auto")
+device = _resolve_whisper_device(_raw_device)
+_raw_model = config.whisper.get("model_size", None)
+if _raw_model is None or str(_raw_model).strip() == "":
+    model_size = "large-v3-turbo"
+else:
+    model_size = _resolve_whisper_model_size(_raw_model, device)
+# legacy underscore alias
+if model_size == "whisper_large_v3_turbo":
+    model_size = "large-v3-turbo"
+compute_type = str(config.whisper.get("compute_type", "int8") or "int8").strip() or "int8"
 # 允许通过 video_language 提升识别准确率（尤其短句）；默认自动检测
 whisper_language = str(config.whisper.get("language", "") or "").strip().lower() or None
 initial_prompt = config.whisper.get("initial_prompt", "") or None
@@ -46,15 +95,52 @@ def create(audio_file, subtitle_file: str = ""):
                     model_size_or_path=model_path, device=device, compute_type=compute_type
                 )
             except Exception as e:
-                logger.error(
-                    f"failed to load model: {e} \n\n"
-                    f"********************************************\n"
-                    f"this may be caused by network issue. \n"
-                    f"please download the model manually and put it in the 'models' folder. \n"
-                    f"see [README.md FAQ](https://github.com/Papiwrld/reelsync) for more details.\n"
-                    f"********************************************\n\n"
+                err_text = str(e).lower()
+                is_oom = (
+                    "out of memory" in err_text
+                    or "oom" in err_text
+                    or ("memory" in err_text and "cuda" in err_text)
+                    or "cublas" in err_text
                 )
-                return None
+                if model_size == "large-v3-turbo" and is_oom:
+                    logger.warning(
+                        f"large-v3-turbo failed to load (likely OOM: {e}), fallback to medium"
+                    )
+                    fallback_size = "medium"
+                    fallback_path = f"{utils.root_dir()}/models/whisper-{fallback_size}"
+                    fallback_bin = f"{fallback_path}/model.bin"
+                    if not os.path.isdir(fallback_path) or not os.path.isfile(
+                        fallback_bin
+                    ):
+                        fallback_path = fallback_size
+                    try:
+                        model = WhisperModel(
+                            model_size_or_path=fallback_path,
+                            device=device,
+                            compute_type=compute_type,
+                        )
+                        globals()["model_size"] = fallback_size
+                        logger.info(f"fallback model loaded: {fallback_path}")
+                    except Exception as e2:
+                        logger.error(
+                            f"failed to load fallback model: {e2} \n\n"
+                            f"********************************************\n"
+                            f"this may be caused by network issue. \n"
+                            f"please download the model manually and put it in the 'models' folder. \n"
+                            f"see [README.md FAQ](https://github.com/Papiwrld/reelsync) for more details.\n"
+                            f"********************************************\n\n"
+                        )
+                        return None
+                else:
+                    logger.error(
+                        f"failed to load model: {e} \n\n"
+                        f"********************************************\n"
+                        f"this may be caused by network issue. \n"
+                        f"please download the model manually and put it in the 'models' folder. \n"
+                        f"see [README.md FAQ](https://github.com/Papiwrld/reelsync) for more details.\n"
+                        f"********************************************\n\n"
+                    )
+                    return None
 
     logger.info(f"start, output file: {subtitle_file}")
     if not subtitle_file:

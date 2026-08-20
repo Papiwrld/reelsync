@@ -99,6 +99,10 @@ max_queued_tasks = 100
 video_preset = "medium"
 video_crf = 23
 video_bitrate = ""
+# 视频帧率：24-60，默认 30。通过 VideoParams.video_fps 或 config.video_fps 配置
+video_fps = 30
+# 音频响度归一化：开启后对最终混音做 loudnorm/AudioNormalize，防止多轨叠加削波
+audio_loudnorm = false
 # 输出分辨率：1080p（默认，兼容低端设备）或 4k/2160p（需 4K 素材与更高显存/磁盘）
 video_resolution = "1080p"
 # 自定义成片输出目录：空值表示默认 storage/tasks/<task_id>/；
@@ -118,9 +122,13 @@ enable_web_scraping = true
 # Web 抓取分辨率上限：1080（默认，低端设备）或 2160（4K，需更高内存与带宽）
 web_scrape_max_height = 1080
 web_scrape_max_filesize = "500M"
+# 平台感知搜索：auto 时按关键词/LLM 选择 YouTube vs TikTok（dance/viral/tiktok/challenge/trend → TikTok），未知 extractor 自动回退到 YouTube (ytsearch)
+web_scrape_search_mode = "auto"
 # 水印处理：默认不移除（移除他人水印可能违反平台 ToS/版权）。仅当你拥有
-# 素材版权时可设为 true，此时自动对下载的网页视频应用 ffmpeg delogo。
+# 素材版权时可设为 true，此时自动对下载的网页视频应用 ffmpeg delogo。TikTok 水印仅在此开关开启时处理，默认保持原样。
 enable_watermark_removal = false
+# 可选：为网页抓取结果启用 TwelveLabs 语义重排（需配置 twelvelabs_api_keys），按标题与搜索词 embedding 相似度排序
+# web 搜索已内置：twelvelabs 启用时自动对标题做 embedding ranking，否则回退到 LLM ranking
 gemini_base_url = ""
 custom_api_video_url = "https://generativelanguage.googleapis.com/v1beta/interactions"
 custom_api_image_url = "https://generativelanguage.googleapis.com/v1beta/interactions"
@@ -129,10 +137,15 @@ custom_api_video_model = "gemini-omni-flash-preview"
 custom_api_image_model = "gemini-3.1-flash-image"
 auto_providers = [ "custom_api", "pixabay", "coverr", "web_scrape", "pollinations",]
 enable_pollinations = true
+cache_max_size_gb = 10
+cache_max_files = 500
+# 字幕渲染引擎：pil（默认，Pillow位图+2×超采样，兼容性最好）vs ass（矢量libass，需ffmpeg支持ass滤镜，清晰度更高）
+subtitle_engine = "pil"
 
 [whisper]
-# small=快速/低显存，medium=平衡（推荐，更准尤其非英文），large-v3-turbo=高质量/较慢
-model_size = "medium"
+# small=快速/低显存，medium=平衡，large-v3-turbo=高质量/较慢（809M distilled，精度接近large-v3，4×更快，~2GB int8）
+# device: cpu=强制 CPU，auto=有 CUDA 则 cuda 否则 cpu（需 torch）
+model_size = "large-v3-turbo"
 device = "cpu"
 compute_type = "int8"
 

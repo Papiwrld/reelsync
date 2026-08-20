@@ -2,6 +2,9 @@
 
 import hmac
 import os
+import threading
+import time
+from collections import deque
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -15,6 +18,44 @@ from app.config import config
 from app.models.exception import HttpException
 from app.router import root_api_router
 from app.utils import utils
+
+# Simple in-memory per-IP token bucket for 9.0+ rate limiting
+_rate_limit_store: dict[str, deque] = {}
+_rate_limit_lock = threading.Lock()
+
+
+def _check_rate_limit(ip: str, path: str) -> tuple[bool, int]:
+    now = time.time()
+    window = 60.0
+    if path.startswith("/api/v1/videos"):
+        limit = 10
+        key = f"{ip}:videos"
+    elif path.startswith("/api/v1/"):
+        limit = 30
+        key = f"{ip}:api"
+    else:
+        return False, 0
+    with _rate_limit_lock:
+        dq = _rate_limit_store.get(key)
+        if dq is None:
+            dq = deque()
+            _rate_limit_store[key] = dq
+        while dq and now - dq[0] >= window:
+            dq.popleft()
+        if len(dq) >= limit:
+            retry_after = int(window - (now - dq[0])) + 1
+            if retry_after < 1:
+                retry_after = 1
+            return True, retry_after
+        dq.append(now)
+        return False, 0
+
+
+def _get_client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For") or ""
+    if xff:
+        return xff.split(",")[0].strip() or (request.client.host if request.client else "unknown")
+    return request.client.host if request.client else "unknown"
 
 
 @asynccontextmanager
@@ -95,6 +136,21 @@ async def verify_tasks_auth(request: Request, call_next):
             token = request.headers.get("x-api-key") or ""
             if not hmac.compare_digest(token, expected):
                 return JSONResponse(status_code=401, content=utils.get_response(401, None, "invalid token"))
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/v1/"):
+        ip = _get_client_ip(request)
+        limited, retry_after = _check_rate_limit(ip, path)
+        if limited:
+            return JSONResponse(
+                status_code=429,
+                content=utils.get_response(429, None, "rate limit exceeded"),
+                headers={"Retry-After": str(retry_after)},
+            )
     return await call_next(request)
 
 

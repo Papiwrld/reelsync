@@ -323,6 +323,7 @@ class VideoParams(BaseModel):
     # None 表示使用扁平 video_terms 传统路径；有值时按场景顺序分配素材。
     scene_search_terms: Optional[List[List[str]]] = None
     scene_narrations: Optional[List[str]] = None
+    scene_durations: Optional[List[float]] = None
 
     # ---- 图文叠加层（Overlay）----
     # 素材时长自动模式时，video_clip_duration=0 由服务层推导，这里记录推导后的值。
@@ -344,6 +345,10 @@ class VideoParams(BaseModel):
     overlay_bg_color: str = "#000000"
 
     n_threads: Optional[int] = 2
+    # 视频帧率：24-60，默认 30。由 config.video_fps 或请求参数覆盖
+    video_fps: int = Field(default=30, ge=24, le=60)
+    # 音频响度归一化：开启后对最终混音做 -14 LUFS 归一化，防止多轨削波
+    audio_loudnorm: bool = False
     paragraph_number: int = Field(default=1, ge=1, le=10)
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)

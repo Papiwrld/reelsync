@@ -922,6 +922,195 @@ def resolve_auto_clip_duration(params, term_count, audio_duration=0.0) -> int:
     return int(max(2, min(12, round(per_clip))))
 
 
+def _compute_scene_durations_from_word_timings(word_timings, scene_narrations, audio_duration):
+    """从逐词时间戳推导每场景真实口播时长；失败返回 None 供调用方回退字符比例。"""
+    if not word_timings or not scene_narrations:
+        return None
+    try:
+        import re
+
+        from app.services.subtitle_engine.timing import tokenize
+
+        _STRIP_RE = re.compile(
+            r"[^A-Za-z0-9\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]"
+        )
+
+        def _norm(text: str) -> str:
+            return _STRIP_RE.sub("", str(text or "")).lower()
+
+        # 每场景 token 数量（CJK 已按单字拆分）
+        scene_tokens_list = []
+        for narration in scene_narrations:
+            toks = tokenize(narration)
+            normed = [t for t in toks if _norm(t)]
+            # 空场景（仅标点）不参与时长计算，返回 None 让上层回退
+            if not normed and str(narration or "").strip():
+                # 尝试按字符兜底，避免单场景失败导致整体回退
+                normed = [str(narration).strip()[:1]]
+            scene_tokens_list.append(normed)
+
+        total_tokens = sum(len(t) for t in scene_tokens_list)
+        if total_tokens == 0:
+            return None
+
+        total_words = len(word_timings)
+        # 允许的词数偏差：过大的不匹配说明 tokenization 与 TTS 词边界不一致，直接回退字符比例
+        if total_words == 0:
+            return None
+        # 若词数与 token 数差异过大（>2 倍），说明 CJK/英文混合导致粒度不同，回退
+        if total_words < total_tokens * 0.4 or total_words > total_tokens * 3.0:
+            # 仍可按比例近似，但记录日志并继续按比例分配
+            logger.debug(
+                f"scene duration word/token mismatch: words={total_words}, tokens={total_tokens}, "
+                "using proportional allocation"
+            )
+
+        # 按 token 比例把逐词时间轴切给各场景（保证每场景至少分配 1 个词）
+        durations: list[float] = []
+        word_idx = 0
+        # 预计算每场景应分配的词数（四舍五入后保证总和 == total_words）
+        words_per_scene: list[int] = []
+        remaining = total_words
+        for idx, toks in enumerate(scene_tokens_list):
+            if idx == len(scene_tokens_list) - 1:
+                words_per_scene.append(remaining)
+            else:
+                # 按 token 比例分配
+                share = len(toks) / total_tokens if total_tokens else 1 / len(scene_tokens_list)
+                cnt = max(1, round(share * total_words))
+                # 防止超额
+                cnt = min(cnt, remaining - (len(scene_tokens_list) - idx - 1))
+                cnt = max(1, cnt)
+                words_per_scene.append(cnt)
+                remaining -= cnt
+
+        # 根据分配切分并计算每段的真实时间跨度
+        for cnt in words_per_scene:
+            if word_idx >= total_words:
+                durations.append(0.0)
+                continue
+            slice_timings = word_timings[word_idx : word_idx + cnt]
+            # 过滤无效时间
+            valid = [w for w in slice_timings if w.start is not None and w.end is not None]
+            if not valid:
+                durations.append(0.0)
+            else:
+                first = min(w.start for w in valid)
+                last = max(w.end for w in valid)
+                span = max(0.0, float(last - first))
+                # 若跨度为 0（同时间词），用词时长累加兜底
+                if span == 0:
+                    span = sum(max(0.0, float(w.end - w.start)) for w in valid)
+                    if span == 0:
+                        span = 0.5
+                durations.append(span)
+            word_idx += cnt
+
+        total_span = sum(durations)
+        if total_span <= 0:
+            return None
+        # 归一化到完整音频时长，补上场景间静音
+        if audio_duration and audio_duration > 0:
+            scale = float(audio_duration) / total_span
+            durations = [d * scale for d in durations]
+        # 防御：单场景过短时钳制到最小 1s 并重新归一化（避免素材过少）
+        # 仅当总时长允许时才钳制，否则保持比例
+        min_per_scene = 1.0
+        if len(durations) > 1 and audio_duration and audio_duration > len(durations) * min_per_scene:
+            durations = [max(d, min_per_scene) for d in durations]
+            # 二次归一化
+            s = sum(durations)
+            if s > 0:
+                scale = float(audio_duration) / s
+                durations = [d * scale for d in durations]
+
+        # 最终校验长度与合法性
+        if len(durations) != len(scene_narrations):
+            return None
+        if any(not isinstance(d, float) or d <= 0 for d in durations):
+            return None
+        logger.info(
+            f"computed scene durations from word timings: "
+            f"{[round(d, 2) for d in durations]} (audio={audio_duration:.2f}s, words={total_words})"
+        )
+        return durations
+    except Exception as exc:  # noqa: BLE001 - 计算失败回退字符比例
+        logger.warning(
+            f"failed to compute scene durations from word timings: "
+            f"error={type(exc).__name__}, detail={exc}"
+        )
+        return None
+
+
+def _maybe_set_scene_durations(task_id, params, audio_duration, subtitle_path, sub_maker):
+    """尝试从 word timings sidecar 推导并写入 params.scene_durations。"""
+    try:
+        scene_narrations = getattr(params, "scene_narrations", None)
+        grouped = getattr(params, "scene_search_terms", None)
+        # 无分组场景则无需计算
+        if not isinstance(grouped, list) or not grouped or not isinstance(scene_narrations, list) or not scene_narrations:
+            return
+        if len(scene_narrations) != len(grouped):
+            logger.debug(
+                f"skip scene durations: narrations {len(scene_narrations)} != groups {len(grouped)}"
+            )
+            return
+        # 已有有效值则不覆盖（例如测试 mock）
+        existing = getattr(params, "scene_durations", None)
+        if isinstance(existing, list) and existing and len(existing) == len(grouped) and all(
+            isinstance(v, (int, float)) and v > 0 for v in existing
+        ):
+            return
+
+        word_timings = []
+        # 优先从 sidecar 加载（Edge/Whisper 已在 generate_subtitle 中写入）
+        try:
+            from app.services.subtitle_engine.timing import (
+                load_word_timings_from_json,
+            )
+
+            sidecar = (subtitle_path or "") + ".words.json" if subtitle_path else ""
+            if sidecar:
+                word_timings = load_word_timings_from_json(sidecar)
+        except Exception:
+            word_timings = []
+
+        # sidecar 缺失时尝试从 sub_maker 直接提取（Edge 内存对象仍可用）
+        if not word_timings and sub_maker is not None:
+            try:
+                from app.services.subtitle_engine.timing import (
+                    extract_word_timings_from_submaker,
+                )
+
+                word_timings = extract_word_timings_from_submaker(sub_maker)
+            except Exception:
+                word_timings = []
+
+        if not word_timings:
+            logger.debug("no word timings available for scene duration computation, fallback to chars")
+            return
+
+        durations = _compute_scene_durations_from_word_timings(
+            word_timings, scene_narrations, float(audio_duration or 0)
+        )
+        if durations and len(durations) == len(grouped):
+            try:
+                params.scene_durations = durations  # type: ignore[attr-defined]
+                # 持久化到 script.json 供后续排查
+                try:
+                    task_artifacts.patch_script_data(task_id, scene_durations=durations)
+                except Exception:
+                    pass
+                logger.info(f"set scene_durations from word timings: {durations}")
+            except Exception as exc:
+                logger.warning(f"failed to set scene_durations: {exc}")
+    except Exception as exc:  # noqa: BLE001 - 绝不阻塞主流程
+        logger.warning(
+            f"scene duration computation skipped: "
+            f"error={type(exc).__name__}, detail={exc}"
+        )
+
+
 def get_video_materials(task_id, params, video_terms, audio_duration):
     if params.video_source == "local":
         logger.info("\n\n## preprocess local materials")
@@ -945,6 +1134,7 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
         # 回落到原有全局/轮询逻辑。
         grouped = getattr(params, "scene_search_terms", None)
         narrations = getattr(params, "scene_narrations", None)
+        scene_durations = getattr(params, "scene_durations", None)
         use_grouped = isinstance(grouped, list) and grouped and any(g for g in grouped if g)
         if use_grouped:
             logger.info(f"using grouped scene terms: {len(grouped)} scenes")
@@ -967,6 +1157,7 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
             ),
             grouped_search_terms=grouped if use_grouped else None,
             scene_narrations=narrations if use_grouped else None,
+            scene_durations=scene_durations if use_grouped else None,
         )
         if not downloaded_videos:
             _mark_task_failed(
@@ -1630,6 +1821,16 @@ def _run_pipeline(
     subtitle_path = generate_subtitle(
         task_id, params, video_script, sub_maker, audio_file
     )
+
+    # 9.0+: 字幕生成后即有逐词时间轴（Edge/Whisper 的 words.json），
+    # 用它推导每场景的真实口播时长，替代字符长度比例，供素材按场景精准分配。
+    try:
+        _maybe_set_scene_durations(task_id, params, audio_duration, subtitle_path, sub_maker)
+    except Exception as exc:  # noqa: BLE001 - 推导失败回退字符比例
+        logger.warning(
+            f"failed to derive scene durations from word timings: "
+            f"error={type(exc).__name__}, detail={exc}"
+        )
 
     if stop_at == "subtitle":
         sm.state.update_task(

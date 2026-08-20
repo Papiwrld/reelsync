@@ -5,13 +5,12 @@ from __future__ import annotations
 import os
 import re
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator
 
 from loguru import logger
 
 from app.utils import utils
-
 
 # 在线素材使用 URL 的 MD5 作为稳定文件名。缓存管理只接受该命名格式，避免把
 # 用户误放到目录中的视频、说明文件或其它业务文件当作缓存删除。
@@ -205,6 +204,112 @@ def clean_video_cache(max_age_days: int | None = None) -> VideoCacheCleanupResul
         "finished cleaning video cache: "
         f"candidates={candidate_count}, candidate_bytes={candidate_size}, "
         f"deleted={deleted_count}, deleted_bytes={deleted_size}, failed={failed_count}"
+    )
+    return VideoCacheCleanupResult(
+        deleted_count=deleted_count,
+        deleted_size=deleted_size,
+        failed_count=failed_count,
+    )
+
+
+def enforce_cache_limit(
+    max_size_gb: float | None = None,
+    max_files: int | None = None,
+) -> VideoCacheCleanupResult:
+    """
+    Auto LRU eviction for cache_videos: if total_size > max_size or count > max_files,
+    deletes oldest vid-*.mp4 by mtime until under limit.
+
+    Defaults from config.app (cache_max_size_gb=10, cache_max_files=500) when
+    arguments are None. Opt-in with defaults that don't delete existing:
+    when cache is already under limits, nothing is deleted.
+    """
+
+    # Resolve defaults from config when not explicitly passed.
+    try:
+        from app.config import config as _cfg  # lazy import to avoid cycle
+
+        if max_size_gb is None:
+            max_size_gb = _cfg.app.get("cache_max_size_gb", 10)
+        if max_files is None:
+            max_files = _cfg.app.get("cache_max_files", 500)
+    except Exception:
+        if max_size_gb is None:
+            max_size_gb = 10
+        if max_files is None:
+            max_files = 500
+
+    # Validate and normalize config values.
+    try:
+        if isinstance(max_size_gb, bool):
+            raise ValueError
+        max_size_gb_f = float(max_size_gb)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"invalid cache_max_size_gb value {max_size_gb!r}, skip LRU enforcement"
+        )
+        return VideoCacheCleanupResult()
+    try:
+        if isinstance(max_files, bool):
+            raise ValueError
+        max_files_i = int(max_files)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"invalid cache_max_files value {max_files!r}, skip LRU enforcement"
+        )
+        return VideoCacheCleanupResult()
+
+    if max_size_gb_f <= 0 or max_files_i <= 0:
+        return VideoCacheCleanupResult()
+
+    max_size_bytes = int(max_size_gb_f * 1024**3)
+
+    entries = list(_iter_video_cache_entries())
+    if not entries:
+        return VideoCacheCleanupResult()
+
+    entries.sort(key=lambda e: e.mtime)
+    total_size = sum(e.size for e in entries)
+    count = len(entries)
+
+    if total_size <= max_size_bytes and count <= max_files_i:
+        return VideoCacheCleanupResult()
+
+    cache_dir = video_cache_dir()
+    deleted_count = 0
+    deleted_size = 0
+    failed_count = 0
+
+    logger.info(
+        f"enforce cache limit: total_size={total_size}, max_size={max_size_bytes}, "
+        f"count={count}, max_files={max_files_i}, evicting oldest"
+    )
+
+    for entry in entries:
+        if total_size <= max_size_bytes and count <= max_files_i:
+            break
+        try:
+            if (
+                os.path.realpath(os.path.dirname(entry.path)) != cache_dir
+                or not _VIDEO_CACHE_FILE_PATTERN.fullmatch(entry.name)
+                or os.path.islink(entry.path)
+            ):
+                raise ValueError("cache file is outside the managed directory")
+            os.unlink(entry.path)
+            deleted_count += 1
+            deleted_size += entry.size
+            total_size -= entry.size
+            count -= 1
+        except (OSError, ValueError) as exc:
+            failed_count += 1
+            logger.warning(
+                f"failed to delete video cache file during LRU enforcement: file={entry.name}, error={exc}"
+            )
+            continue
+
+    logger.info(
+        f"finished enforce cache limit: deleted={deleted_count}, deleted_bytes={deleted_size}, "
+        f"failed={failed_count}, remaining_size={total_size}, remaining_count={count}"
     )
     return VideoCacheCleanupResult(
         deleted_count=deleted_count,

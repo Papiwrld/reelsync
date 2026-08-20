@@ -823,6 +823,11 @@ def save_config():
 
 _cfg = load_config()
 app = _SynchronizedConfig(_cfg.get("app", {}), section_name="app")
+# Video cache LRU defaults: opt-in eviction only when limits exceeded.
+if "cache_max_size_gb" not in app:
+    app["cache_max_size_gb"] = 10
+if "cache_max_files" not in app:
+    app["cache_max_files"] = 500
 whisper = _SynchronizedConfig(_cfg.get("whisper", {}), section_name="whisper")
 proxy = _SynchronizedConfig(_cfg.get("proxy", {}), section_name="proxy")
 azure = _SynchronizedConfig(_cfg.get("azure", {}), section_name="azure")

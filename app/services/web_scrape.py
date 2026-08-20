@@ -5,7 +5,7 @@ import re
 import signal
 import subprocess
 import sys
-from typing import Any, List
+from typing import Any
 
 from loguru import logger
 
@@ -183,19 +183,110 @@ def _rewrite_query_for_web_search(search_term: str) -> str:
     return search_term
 
 
+_TIKTOK_KEYWORDS = ("dance", "viral", "tiktok", "challenge", "trend")
+
+_TIKTOK_SEARCH_PREFIX = "tiktoksearch5:"
+_YT_SEARCH_PREFIX = "ytsearch5:"
+
+
+def _decide_web_search_platform(search_term: str) -> str:
+    """Decide best yt-dlp search platform for a scene term.
+
+    Heuristic: terms containing dance/viral/tiktok/challenge/trend are better
+    served by TikTok; otherwise use LLM to decide. Falls back to youtube on
+    any failure. Return value is one of 'youtube', 'tiktok', 'instagram'.
+    """
+    term_lower = (search_term or "").lower()
+    if any(kw in term_lower for kw in _TIKTOK_KEYWORDS):
+        return "tiktok"
+    try:
+        from app.config import config
+        from app.services import llm as _llm
+
+        has_llm = bool(
+            config.app.get("llm_provider")
+            or config.app.get("openai_api_key")
+            or config.app.get("gemini_api_key")
+        )
+        if not has_llm:
+            return "youtube"
+        prompt = (
+            "Given the video search query, which platform would have the most relevant videos? "
+            "Options: youtube, tiktok, instagram. "
+            "Dance, viral, challenge, or trend content is best on TikTok. Otherwise choose youtube. "
+            "Return ONLY one word: youtube, tiktok, or instagram.\n"
+            f'Query: "{search_term}"'
+        )
+        raw = _llm._generate_response(prompt=prompt)
+        if isinstance(raw, str) and not raw.startswith("Error:"):
+            cleaned = raw.strip().lower().split()[0].strip('.,"\'') if raw.strip() else ""
+            if cleaned in ("youtube", "tiktok", "instagram"):
+                logger.info(f"LLM chose web search platform '{cleaned}' for {search_term!r}")
+                return cleaned
+    except Exception as exc:  # noqa: BLE001 - platform decision must never block search
+        logger.debug(f"platform decision fallback: {exc}")
+    return "youtube"
+
+
+def _web_search_prefix(platform: str, term: str) -> str:
+    """Map platform to yt-dlp search prefix. Unknown platforms fallback to ytsearch."""
+    if platform == "tiktok":
+        return f"{_TIKTOK_SEARCH_PREFIX}{term}"
+    if platform == "instagram":
+        # yt-dlp has no stable instagram search extractor; caller will fallback
+        return f"instagram:search:{term}"
+    return f"{_YT_SEARCH_PREFIX}{term}"
+
+
 def _rank_web_results_by_relevance(
-    results: List[MaterialInfo], search_term: str, top_k: int = 5
-) -> List[MaterialInfo]:
+    results: list[MaterialInfo], search_term: str, top_k: int = 5
+) -> list[MaterialInfo]:
     """LLM re-rank web candidates by title/description relevance to the scene.
 
     Keeps top_k most relevant. Falls back to original order on LLM failure.
     """
     if len(results) <= top_k:
         return results
+    # Optional TwelveLabs/CLIP embedding ranking for web video thumbnails:
+    # if twelvelabs is enabled, embed search term vs video title for semantic ranking.
     try:
+        from app.services import twelvelabs as _tl
+
+        if _tl.is_enabled():
+            _term_vec = _tl.embed_text(search_term)
+            if _term_vec:
+                import math as _math
+
+                _scored: list[tuple[MaterialInfo, float]] = []
+                for _r in results:
+                    _info = _r.source_info or {}
+                    _text = str(_info.get("title") or _info.get("description") or "").strip()
+                    if not _text:
+                        _text = search_term
+                    _vec = _tl.embed_text(_text)
+                    if _vec is None:
+                        _scored.append((_r, -1.0))
+                    else:
+                        _dot = sum(x * y for x, y in zip(_term_vec, _vec))
+                        _na = _math.sqrt(sum(x * x for x in _term_vec))
+                        _nb = _math.sqrt(sum(y * y for y in _vec))
+                        _cos = _dot / (_na * _nb) if _na and _nb else 0.0
+                        _scored.append((_r, _cos))
+                _scored.sort(key=lambda x: x[1], reverse=True)
+                _ranked = [r for r, _ in _scored]
+                logger.info(
+                    f"web results twelvelabs re-ranked for {search_term!r}: "
+                    f"{[_r.source_info.get('title','')[:30] for _r in _ranked[:top_k]]}"
+                )
+                return _ranked[:top_k]
+    except Exception as exc:  # noqa: BLE001 - embedding is optional, never blocks
+        logger.debug(f"twelvelabs web rank fallback: {exc}")
+
+    try:
+        import json as _json
+
         from app.config import config
         from app.services import llm as _llm
-        import json as _json
 
         if not config.app.get("llm_provider") and not config.app.get("openai_api_key") and not config.app.get("gemini_api_key"):
             return results[:top_k]
@@ -243,7 +334,7 @@ def search_videos_web_scrape(
     search_term: str,
     minimum_duration: int,
     video_aspect: VideoAspect,
-) -> List[MaterialInfo]:
+) -> list[MaterialInfo]:
     """
     Search for web videos using yt-dlp. Returns the top 5 results matching the search term.
 
@@ -253,99 +344,141 @@ def search_videos_web_scrape(
     """
     # Intelligent query rewrite for better YouTube/TikTok recall
     effective_term = _rewrite_query_for_web_search(search_term)
-    logger.info(f"Searching web videos for {search_term!r} (effective: {effective_term!r}) via yt-dlp")
+    platform = _decide_web_search_platform(search_term)
+    primary_prefix = _web_search_prefix(platform, effective_term)
+    yt_fallback_prefix = f"{_YT_SEARCH_PREFIX}{effective_term}"
+    prefixes_to_try = [primary_prefix]
+    if primary_prefix != yt_fallback_prefix:
+        prefixes_to_try.append(yt_fallback_prefix)
+    logger.info(
+        f"Searching web videos for {search_term!r} (effective: {effective_term!r}, "
+        f"platform: {platform}) via yt-dlp"
+    )
     results = []
 
-    # ytsearch5: keyword limits search to 5 results
-    command = [
-        "yt-dlp",
-        f"ytsearch5:{effective_term}",
-        "--dump-json",
-        "--default-search",
-        "ytsearch",
-        "--no-playlist",
-        "--match-filter",
-        f"duration >= {minimum_duration}",
-        "--max-filesize",
-        _get_max_filesize(),
-        "--ignore-errors",
-    ]
+    for search_prefix in prefixes_to_try:
+        command = [
+            "yt-dlp",
+            search_prefix,
+            "--dump-json",
+            "--default-search",
+            "ytsearch",
+            "--no-playlist",
+            "--match-filter",
+            f"duration >= {minimum_duration}",
+            "--max-filesize",
+            _get_max_filesize(),
+            "--ignore-errors",
+        ]
 
-    try:
-        # Run yt-dlp in its own process group so a timeout can kill the whole
-        # tree (yt-dlp may spawn ffmpeg for probing).
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            **_popen_kwargs(),
-        )
         try:
-            stdout, stderr = process.communicate(timeout=_SEARCH_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            # 终止整个进程组并收割句柄，避免超时后留下僵尸 yt-dlp/ffmpeg。
-            _kill_process_tree(process)
-            process.communicate()
-            logger.error(f"yt-dlp search timed out after {_SEARCH_TIMEOUT_SECONDS}s")
-            return []
-
-        for line in stdout.splitlines():
-            if not line.strip():
-                continue
+            # Run yt-dlp in its own process group so a timeout can kill the whole
+            # tree (yt-dlp may spawn ffmpeg for probing).
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                **_popen_kwargs(),
+            )
             try:
-                data = json.loads(line)
-                url = data.get("webpage_url") or data.get("url")
-                duration = data.get("duration", minimum_duration)
+                stdout, stderr = process.communicate(timeout=_SEARCH_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                # 终止整个进程组并收割句柄，避免超时后留下僵尸 yt-dlp/ffmpeg。
+                _kill_process_tree(process)
+                process.communicate()
+                logger.error(f"yt-dlp search timed out after {_SEARCH_TIMEOUT_SECONDS}s")
+                return []
 
-                # yt-dlp resolution is sometimes widthxheight, or just width
-                width = data.get("width")
-                height = data.get("height")
-
-                # 搜索阶段就过滤方向不符或低于 _MIN_MATERIAL_DIMENSION 的素材，
-                # 否则横屏/低清内容会混入竖屏成片（黑边）或放大后变糊。
-                if not _matches_video_aspect(width, height, video_aspect):
-                    logger.debug(
-                        f"skip web material with mismatched orientation: "
-                        f"term={search_term!r}, size={width}x{height}"
+            # Fallback on unknown extractor: yt-dlp reports Unsupported url scheme
+            _ret = getattr(process, "returncode", 0)
+            if _ret not in (0, None):
+                err_text = (stderr or "").lower()
+                is_unknown_extractor = (
+                    "unsupported url scheme" in err_text
+                    or "unknown extractor" in err_text
+                    or "unable to handle request" in err_text
+                )
+                # tiktoksearch/instagram prefixes are not supported by current yt-dlp;
+                # treat any failure for those prefixes as unknown extractor to trigger fallback
+                if search_prefix.startswith((_TIKTOK_SEARCH_PREFIX, "instagram")):
+                    is_unknown_extractor = is_unknown_extractor or _ret not in (0, None)
+                if is_unknown_extractor and search_prefix != prefixes_to_try[-1]:
+                    logger.warning(
+                        f"search prefix {search_prefix!r} unsupported ({(stderr or '').strip()[:200]}), "
+                        "falling back to ytsearch"
                     )
+                    continue
+                # No more fallbacks or non-extractor error: log and stop
+                logger.debug(
+                    f"yt-dlp search failed for {search_term!r} with prefix {search_prefix!r}: "
+                    f"{(stderr or '').strip()[:300]}"
+                )
+                if search_prefix != prefixes_to_try[-1]:
+                    continue
+                return results
+
+            for line in stdout.splitlines():
+                if not line.strip():
                     continue
                 try:
-                    short_side = min(int(float(width)), int(float(height)))
-                except (TypeError, ValueError):
-                    continue
-                if short_side < _MIN_MATERIAL_DIMENSION:
-                    logger.debug(
-                        f"skip web material below minimum resolution: "
-                        f"term={search_term!r}, size={width}x{height}, "
-                        f"minimum={_MIN_MATERIAL_DIMENSION}"
-                    )
-                    continue
+                    data = json.loads(line)
+                    url = data.get("webpage_url") or data.get("url")
+                    duration = data.get("duration", minimum_duration)
 
-                resolution = f"{width}x{height}" if width and height else ""
+                    # yt-dlp resolution is sometimes widthxheight, or just width
+                    width = data.get("width")
+                    height = data.get("height")
 
-                if url:
-                    results.append(
-                        MaterialInfo(
-                            provider="web_scrape",
-                            url=url,
-                            duration=duration,
-                            resolution=resolution,
-                            source_info={
-                                "provider": "web_scrape",
-                                "search_term": search_term,
-                                "title": str(data.get("title") or ""),
-                                "description": str(data.get("description") or ""),
-                            },
+                    # 搜索阶段就过滤方向不符或低于 _MIN_MATERIAL_DIMENSION 的素材，
+                    # 否则横屏/低清内容会混入竖屏成片（黑边）或放大后变糊。
+                    if not _matches_video_aspect(width, height, video_aspect):
+                        logger.debug(
+                            f"skip web material with mismatched orientation: "
+                            f"term={search_term!r}, size={width}x{height}"
                         )
-                    )
-            except json.JSONDecodeError:
-                logger.warning(f"Failed to parse yt-dlp json: {line}")
+                        continue
+                    try:
+                        short_side = min(int(float(width)), int(float(height)))
+                    except (TypeError, ValueError):
+                        continue
+                    if short_side < _MIN_MATERIAL_DIMENSION:
+                        logger.debug(
+                            f"skip web material below minimum resolution: "
+                            f"term={search_term!r}, size={width}x{height}, "
+                            f"minimum={_MIN_MATERIAL_DIMENSION}"
+                        )
+                        continue
 
-    except Exception as e:
-        logger.error(f"Error executing yt-dlp: {e}")
+                    resolution = f"{width}x{height}" if width and height else ""
+
+                    if url:
+                        results.append(
+                            MaterialInfo(
+                                provider="web_scrape",
+                                url=url,
+                                duration=duration,
+                                resolution=resolution,
+                                source_info={
+                                    "provider": "web_scrape",
+                                    "search_term": search_term,
+                                    "title": str(data.get("title") or ""),
+                                    "description": str(data.get("description") or ""),
+                                },
+                            )
+                        )
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse yt-dlp json: {line}")
+            # Successfully parsed this prefix, stop trying further fallbacks
+            break
+
+        except Exception as e:  # noqa: BLE001 - yt-dlp execution must never raise
+            logger.error(f"Error executing yt-dlp: {e}")
+            if search_prefix != prefixes_to_try[-1]:
+                continue
+            return results
 
     # Highly intelligent re-ranking: keep top-5 most scene-relevant
     if results:
@@ -482,7 +615,7 @@ def _maybe_remove_watermark(input_path: str) -> bool:
             "copy",
             tmp,
         ]
-        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120, check=False)
         if proc.returncode == 0 and os.path.isfile(tmp) and os.path.getsize(tmp) > 0:
             shutil.move(tmp, input_path)
             logger.info(f"watermark delogo applied: {input_path}")

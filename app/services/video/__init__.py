@@ -43,7 +43,7 @@ from app.utils import file_security, utils
 from .constants import (
     audio_codec,
     audio_bitrate,
-    fps,
+    fps,  # noqa: F401
     _VIDEO_DURATION_SAFETY_MARGIN,
     _MIN_MATERIAL_DIMENSION,
     _MIN_DIMENSION_TOLERANCE,
@@ -56,12 +56,197 @@ from .constants import (
     _FFPROBE_TIMEOUT_SECONDS,
     _get_required_video_duration,
     is_material_resolution_acceptable,
+    _VIDEO_FPS_DEFAULT,
+    _VIDEO_FPS_MIN,
+    _VIDEO_FPS_MAX,
+    _validate_video_fps,
+    get_audio_loudnorm_ffmpeg_params,
 )
 from .types import SubClippedVideoClip
 
 # Tests patch this set directly (vd._runtime_disabled_video_codecs.clear()).
 # Keep it here so the exact same set object is shared with all functions.
 _runtime_disabled_video_codecs = set()
+
+
+def _get_configured_video_fps() -> int:
+    """Return validated video fps from config (24-60), default 30."""
+    try:
+        raw = config.app.get("video_fps", _VIDEO_FPS_DEFAULT)
+        validated = _validate_video_fps(raw)
+        # log clamp for observability when user misconfigures
+        try:
+            iv = int(raw)
+            if iv != validated:
+                logger.warning(
+                    f"video_fps {raw!r} out of range [{_VIDEO_FPS_MIN}-{_VIDEO_FPS_MAX}], "
+                    f"fallback to {validated}"
+                )
+        except Exception:
+            pass
+        return validated
+    except Exception:
+        return _VIDEO_FPS_DEFAULT
+
+
+def _get_effective_video_fps(
+    params: VideoParams | None = None, explicit: int | None = None
+) -> int:
+    """Resolve effective fps: explicit > params.video_fps > config > default."""
+    if explicit is not None:
+        v = _validate_video_fps(explicit)
+        if v == explicit or str(explicit).strip().isdigit():
+            # if explicit was out of range, _validate returns default;
+            # still respect it but log
+            try:
+                if int(explicit) != v:
+                    logger.warning(
+                        f"explicit video_fps {explicit!r} out of range, fallback to {v}"
+                    )
+            except Exception:
+                pass
+        return v
+    if params is not None:
+        try:
+            # Prefer explicit VideoParams value only when caller set it;
+            # default 30 should not mask config override.
+            if hasattr(params, "model_fields_set"):
+                if "video_fps" not in params.model_fields_set:  # noqa: SLF001
+                    raise AttributeError("use_config")
+            pv = getattr(params, "video_fps", None)
+            if pv is not None:
+                v = _validate_video_fps(pv)
+                if int(pv) != v:
+                    logger.warning(
+                        f"VideoParams.video_fps {pv!r} out of range, fallback to {v}"
+                    )
+                return v
+        except AttributeError:
+            pass
+        except Exception:
+            pass
+    return _get_configured_video_fps()
+
+
+def _is_loudnorm_enabled(params: VideoParams | None = None) -> bool:
+    """Check loudnorm flag from params or config (params takes precedence when set)."""
+    if params is not None:
+        try:
+            if hasattr(params, "model_fields_set"):
+                if "audio_loudnorm" not in params.model_fields_set:  # noqa: SLF001
+                    raise AttributeError("use_config")
+            pv = getattr(params, "audio_loudnorm", None)
+            if pv is not None:
+                if isinstance(pv, str):
+                    return pv.strip().lower() in ("true", "1", "yes", "on")
+                return bool(pv)
+        except AttributeError:
+            pass
+        except Exception:
+            pass
+    try:
+        raw = config.app.get("audio_loudnorm", False)
+        if isinstance(raw, str):
+            return raw.strip().lower() in ("true", "1", "yes", "on")
+        return bool(raw)
+    except Exception:
+        return False
+
+
+def _get_subtitle_engine(params: VideoParams | None = None) -> str:
+    """Return subtitle engine 'pil' or 'ass' (default pil)."""
+    # params override (future VideoParams subtitle_engine field)
+    if params is not None:
+        try:
+            eng = getattr(params, "subtitle_engine", None)
+            if eng:
+                v = str(eng).strip().lower()
+                if v in ("pil", "ass"):
+                    return v
+        except Exception:
+            pass
+    try:
+        eng = config.app.get("subtitle_engine", "pil")
+        v = str(eng or "pil").strip().lower()
+        return "ass" if v == "ass" else "pil"
+    except Exception:
+        return "pil"
+
+
+def _try_generate_ass_sidecar(
+    subtitle_path: str,
+    video_width: int,
+    video_height: int,
+    style,
+    word_timings,
+) -> str | None:
+    """Generate ASS sidecar for libass burn, return path or None."""
+    if not subtitle_path or not os.path.exists(subtitle_path):
+        return None
+    # ASS path next to SRT: subtitle.srt -> subtitle.ass
+    ass_path = subtitle_path
+    if ass_path.lower().endswith(".srt"):
+        ass_path = ass_path[:-4] + ".ass"
+    else:
+        ass_path = ass_path + ".ass"
+    try:
+        from app.services.subtitle_engine.renderer import generate_ass_file
+
+        ok = generate_ass_file(
+            subtitle_path, ass_path, int(video_width), int(video_height), style, word_timings
+        )
+        if ok and os.path.isfile(ass_path):
+            return ass_path
+    except Exception as exc:
+        logger.warning(f"failed to generate ASS sidecar: {exc}")
+    return None
+
+
+def _burn_ass_subtitles_via_ffmpeg(
+    input_video: str, ass_path: str, output_video: str, threads: int = 2
+) -> bool:
+    """Burn ASS subtitles onto video via ffmpeg libass filter."""
+    if not os.path.isfile(input_video) or not os.path.isfile(ass_path):
+        return False
+    ffmpeg = utils.get_ffmpeg_binary()
+    # Escape path for ass filter: Windows drive colon must be escaped as \:
+    safe_ass = ass_path.replace("\\", "/")
+    # Escape colon after drive letter for ffmpeg filter grammar
+    if len(safe_ass) > 1 and safe_ass[1] == ":":
+        safe_ass = safe_ass[0] + r"\:" + safe_ass[2:]
+    # also escape single quotes
+    safe_ass = safe_ass.replace("'", r"'\''")
+    # Use single quotes around path if it contains special chars or spaces
+    # libass expects raw path; quoting helps ffmpeg parse filter correctly
+    vf_arg = f"ass={safe_ass}"
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        input_video,
+        "-vf",
+        vf_arg,
+        "-c:a",
+        "copy",
+        "-threads",
+        str(threads or 2),
+        output_video,
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120, check=False
+        )
+        if result.returncode != 0:
+            msg = (result.stderr or result.stdout or "").strip()[:800]
+            logger.warning(f"ffmpeg ass burn failed (code {result.returncode}): {msg}")
+            return False
+        return True
+    except subprocess.TimeoutExpired as exc:
+        logger.warning(f"ffmpeg ass burn timed out: {exc}")
+        return False
+    except Exception as exc:
+        logger.warning(f"ffmpeg ass burn exception: {exc}")
+        return False
 
 
 def _prioritize_unique_source_clips(
@@ -395,6 +580,9 @@ def _write_videofile_with_codec_fallback(clip, output_file: str, codec: str, **k
 
 def _escape_ffmpeg_concat_path(file_path: str) -> str:
     # concat demuxer 使用单引号包裹路径，路径中的单引号需要先转义。
+    # 换行符可注入新的 file 指令，必须拒绝。
+    if "\n" in file_path or "\r" in file_path:
+        raise ValueError("file path contains newline or carriage return")
     return file_path.replace("'", "'\\''")
 
 
@@ -417,6 +605,21 @@ def concat_video_clips_with_ffmpeg(
     output_dir: str,
     max_duration: float | None = None,
 ):
+    # 校验所有片段路径：拒绝换行注入并确保在允许目录内，防止 -safe 0 下的路径穿越。
+    for clip_file in clip_files:
+        if "\n" in clip_file or "\r" in clip_file:
+            raise ValueError("clip file path contains newline or carriage return")
+        try:
+            file_security.resolve_path_within_directory(output_dir, clip_file)
+        except ValueError:
+            # 兼容部分调用仍传入 task_dir/storage 下的绝对路径，依次回退校验
+            try:
+                file_security.resolve_path_within_directory(utils.task_dir(), clip_file)
+            except ValueError:
+                try:
+                    file_security.resolve_path_within_directory(utils.storage_dir(), clip_file)
+                except ValueError as exc:
+                    raise ValueError(f"clip file path is outside allowed directory: {clip_file}") from exc
     concat_list_file = os.path.join(output_dir, "ffmpeg-concat-list.txt")
     with open(concat_list_file, "w", encoding="utf-8") as fp:
         for clip_file in clip_files:
@@ -529,10 +732,10 @@ def _open_image_clip_with_fallback(image_path: str):
         return ImageClip(sanitized_path), sanitized_path
 
 
-def _kenburns_image_to_video(
+def _kenburns_image_to_video(  # noqa: F811
     image_path: str,
     clip_duration: int = 4,
-    fps: int = 30,
+    fps: int | None = None,  # noqa: A002, F811
     effect: str = "kenburns",
 ) -> str:
     """
@@ -580,7 +783,8 @@ def _kenburns_image_to_video(
             )
             final_clip = CompositeVideoClip([zoom_clip])
         video_file = f"{image_path}.mp4"
-        final_clip.write_videofile(video_file, fps=fps, logger=None)
+        effective_fps = _get_effective_video_fps(explicit=fps)
+        final_clip.write_videofile(video_file, fps=effective_fps, logger=None)
         logger.success(f"image processed: {video_file} (effect={effect})")
         return video_file
     except Exception as exc:
@@ -614,7 +818,10 @@ def delete_image_material_clips(video_paths: List[str]) -> None:
 
 
 def convert_image_materials_to_videos(
-    video_paths: List[str], clip_duration: int = 4, image_effect: str = "kenburns"
+    video_paths: List[str],
+    clip_duration: int = 4,
+    image_effect: str = "kenburns",
+    video_fps: int | None = None,
 ) -> List[str]:
     """
     把素材列表里的图片（生成式 AI 提供）批量转成带运镜效果的视频片段。
@@ -624,10 +831,13 @@ def convert_image_materials_to_videos(
     探测处理。
     """
     converted: List[str] = []
+    effective_fps = _get_effective_video_fps(explicit=video_fps)
     for path in video_paths:
         ext = utils.parse_extension(path)
         if ext in const.FILE_TYPE_IMAGES:
-            video_file = _kenburns_image_to_video(path, clip_duration, effect=image_effect)
+            video_file = _kenburns_image_to_video(
+                path, clip_duration, fps=effective_fps, effect=image_effect
+            )
             if video_file:
                 converted.append(video_file)
                 continue
@@ -847,11 +1057,11 @@ def _build_blurred_background(clip, target_width: int, target_height: int):
 _MIX_CONCAT_CHUNK_SIZE = 3
 
 
-def _mix_concat_group(
+def _mix_concat_group(  # noqa: F811
     clip_files: List[str],
     overlap: float,
     codec: str,
-    fps: int,
+    fps: int,  # noqa: A002, F811
     threads: int,
     output_file: str,
     is_intermediate: bool = False,
@@ -920,6 +1130,7 @@ def combine_videos(
     threads: int = 2,
     clip_speed: float = 1.0,
     mix_overlap_duration: float = 1.0,
+    video_fps: int | None = None,
 ) -> str:
     audio_clip = AudioFileClip(audio_file)
     try:
@@ -965,6 +1176,8 @@ def combine_videos(
             f"to {effective_mix_overlap:.2f}s (must be smaller than clip duration)"
         )
     output_dir = os.path.dirname(combined_video_path)
+    # fps configurable: 24-60 valid, default 30 via config or explicit
+    effective_fps = _get_effective_video_fps(explicit=video_fps)
 
     aspect = VideoAspect(video_aspect)
     video_width, video_height = aspect.to_resolution()
@@ -1144,7 +1357,7 @@ def combine_videos(
                 clip_file,
                 codec=_get_configured_video_codec(),
                 logger=None,
-                fps=fps,
+                fps=effective_fps,
                 threads=threads,
                 **_get_video_encode_args(),
             )
@@ -1250,7 +1463,7 @@ def combine_videos(
                         group,
                         effective_mix_overlap,
                         _get_configured_video_codec(),
-                        fps,
+                        effective_fps,
                         threads,
                         group_output,
                         is_intermediate=True,
@@ -1263,7 +1476,7 @@ def combine_videos(
                 current_files,
                 effective_mix_overlap,
                 _get_configured_video_codec(),
-                fps,
+                effective_fps,
                 threads,
                 combined_video_path,
             )
@@ -1697,6 +1910,10 @@ def generate_video(
     font_path = ""
     renderer = None
     word_timings = []
+    subtitle_engine = _get_subtitle_engine(params)
+    ass_sidecar_path: str | None = None
+    style = None
+    logger.info(f"  ⑤ subtitle engine: {subtitle_engine}")
     if params.subtitle_enabled:
         # 字幕样式与字体解析统一交给字幕引擎：注册表自动回退缺失字体
         # （旧配置引用的 STHeiti 系列已从仓库移除），永不因字体崩溃。
@@ -1730,6 +1947,17 @@ def generate_video(
         )
         if subtitle_path:
             word_timings = load_word_timings_from_json(subtitle_path + ".words.json")
+        # ASS engine: generate sidecar now, keep PIL fallback on failure
+        if subtitle_engine == "ass" and subtitle_path and os.path.exists(subtitle_path) and style is not None:
+            ass_sidecar_path = _try_generate_ass_sidecar(
+                subtitle_path, video_width, video_height, style, word_timings
+            )
+            if ass_sidecar_path:
+                logger.info(f"  ⑥ ASS sidecar: {ass_sidecar_path} (libass vector path)")
+            else:
+                logger.warning("ASS sidecar generation failed, fallback to PIL")
+                subtitle_engine = "pil"
+                ass_sidecar_path = None
 
 
     # MoviePy 的 CompositeAudioClip.close() 不会关闭子 AudioFileClip。这里用
@@ -1754,6 +1982,7 @@ def generate_video(
                 font_size=params.font_size,
             )
 
+        sub = None
         if subtitle_path and os.path.exists(subtitle_path) and renderer is not None:
             sub = clip_stack.enter_context(
                 SubtitlesClip(
@@ -1762,19 +1991,22 @@ def generate_video(
                     make_textclip=make_textclip,
                 )
             )
-            text_clips = []
-            for item in sub.subtitles:
-                # 每个字幕帧交给字幕引擎渲染（含预设样式、定位、动画与
-                # 逐词高亮）。缺失/损坏的词语时间轴只影响高亮，不阻断渲染。
-                clip = renderer.render(item, word_timings)
-                if clip is None:
-                    continue
-                if isinstance(clip, list):
-                    text_clips.extend(clip)
-                else:
-                    text_clips.append(clip)
-            video_clip = CompositeVideoClip([video_clip, *text_clips])
-            clip_stack.callback(video_clip.close)
+            if subtitle_engine == "pil":
+                text_clips = []
+                for item in sub.subtitles:
+                    # 每个字幕帧交给字幕引擎渲染（含预设样式、定位、动画与
+                    # 逐词高亮）。缺失/损坏的词语时间轴只影响高亮，不阻断渲染。
+                    clip = renderer.render(item, word_timings)
+                    if clip is None:
+                        continue
+                    if isinstance(clip, list):
+                        text_clips.extend(clip)
+                    else:
+                        text_clips.append(clip)
+                video_clip = CompositeVideoClip([video_clip, *text_clips])
+                clip_stack.callback(video_clip.close)
+            else:
+                logger.info("ASS engine: skip PIL compositing, will burn via ffmpeg after encode")
 
         # 图文叠加层：标题卡 / 事实卡 / callout 按字幕时间轴对齐渲染。
         if getattr(params, "overlay_enabled", False):
@@ -1961,6 +2193,26 @@ def generate_video(
         else:
             audio_clip = CompositeAudioClip(master_audio_list)
 
+        # Gap 1: loudness normalization — voice 1.0 + bgm 0.2 + atmosphere 0.3 可削波
+        # 默认关闭以保持兼容，开启后先尝试 MoviePy AudioNormalize，缺失时用 ffmpeg loudnorm
+        loudnorm_enabled = _is_loudnorm_enabled(params)
+        loudnorm_via_afx = False
+        if loudnorm_enabled:
+            try:
+                if hasattr(afx, "AudioNormalize"):
+                    audio_clip = audio_clip.with_effects([afx.AudioNormalize()])
+                    loudnorm_via_afx = True
+                    logger.info("audio loudness normalization via AudioNormalize enabled (-14 LUFS)")
+                else:
+                    logger.info(
+                        "AudioNormalize not available, will use ffmpeg loudnorm filter"
+                    )
+            except Exception as exc:
+                logger.warning(
+                    f"audio loudness normalization failed, continuing without: {exc}"
+                )
+                loudnorm_via_afx = False
+
         final_video_clip = video_clip.with_audio(audio_clip)
         clip_stack.callback(final_video_clip.close)
         # 显式沿用输入音频的采样率；如果取不到，再回退 MoviePy 默认的 44100Hz。
@@ -1973,6 +2225,16 @@ def generate_video(
         # WebUI 的 final-<index>.<ext> 全匹配规则也不会把它误判成成片。
         temp_output_file = output_file + ".tmp.mp4"
         try:
+            effective_fps = _get_effective_video_fps(params)
+            encode_kwargs = _get_video_encode_args()
+            # fallback loudnorm via ffmpeg when AudioNormalize not used
+            if loudnorm_enabled and not loudnorm_via_afx:
+                ffmpeg_params = list(encode_kwargs.get("ffmpeg_params") or [])
+                ffmpeg_params.extend(get_audio_loudnorm_ffmpeg_params())
+                encode_kwargs["ffmpeg_params"] = ffmpeg_params
+                logger.info(
+                    "audio loudness normalization via ffmpeg loudnorm filter (-14 LUFS)"
+                )
             _write_videofile_with_codec_fallback(
                 final_video_clip,
                 output_file=temp_output_file,
@@ -1983,12 +2245,34 @@ def generate_video(
                 temp_audiofile_path=_get_temp_audio_dir(output_dir),
                 threads=params.n_threads or 2,
                 logger=None,
-                fps=fps,
-                **_get_video_encode_args(),
+                fps=effective_fps,
+                **encode_kwargs,
             )
-            os.replace(temp_output_file, output_file)
+            # ASS vector path: burn sidecar via ffmpeg libass instead of PIL bitmap
+            if subtitle_engine == "ass" and ass_sidecar_path and os.path.isfile(ass_sidecar_path):
+                burned_file = temp_output_file + ".ass_burned.mp4"
+                if _burn_ass_subtitles_via_ffmpeg(
+                    temp_output_file,
+                    ass_sidecar_path,
+                    burned_file,
+                    params.n_threads or 2,
+                ):
+                    delete_files([temp_output_file])
+                    os.replace(burned_file, output_file)
+                else:
+                    logger.warning(
+                        "ASS burn failed, fallback to video without ASS (PIL fallback needs recomposition)"
+                    )
+                    delete_files([burned_file])
+                    os.replace(temp_output_file, output_file)
+            else:
+                os.replace(temp_output_file, output_file)
         except Exception:
             delete_files([temp_output_file])
+            try:
+                delete_files([temp_output_file + ".ass_burned.mp4"])
+            except Exception:
+                pass
             raise
         return bgm_mix_succeeded
 

@@ -789,3 +789,311 @@ def _get_visible_center_position(text_clip, container_width: int, container_heig
         logger.debug(f"failed to center subtitle text by visible mask: {str(exc)}")
 
     return x, y
+
+
+# ---------------------------------------------------------------------------
+# ASS (libass) 矢量字幕生成：作为 PIL 位图路径的矢量替代（Gap 2）
+# ---------------------------------------------------------------------------
+
+
+def _ass_escape_text(text: str) -> str:
+    """Escape ASS special characters but preserve intentional overrides."""
+    return (
+        str(text or "")
+        .replace("\\", r"\\")
+        .replace("{", r"\{")
+        .replace("}", r"\}")
+    )
+
+
+def _format_ass_time(seconds: float) -> str:
+    """Format seconds as ASS timestamp H:MM:SS.CS (centiseconds)."""
+    total_cs = max(0, int(round(float(seconds) * 100)))
+    cs = total_cs % 100
+    total_s = total_cs // 100
+    s = total_s % 60
+    total_m = total_s // 60
+    m = total_m % 60
+    h = total_m // 60
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def _hex_to_ass_color(hex_color: str, opacity: float = 0.0) -> str:
+    """Convert #RRGGBB + opacity (0 opaque …1 transparent) to ASS &HAABBGGRR."""
+    rgb = _hex_to_rgb(hex_color)
+    try:
+        alpha = int(round(max(0.0, min(1.0, float(opacity))) * 255))
+    except Exception:
+        alpha = 0
+    # ASS uses BGR order and inverted alpha (00 opaque)
+    return f"&H{alpha:02X}{rgb[2]:02X}{rgb[1]:02X}{rgb[0]:02X}"
+
+
+def _ass_font_name(style) -> str:
+    font_name = getattr(style, "font_name", "") or "Montserrat-Bold.ttf"
+    base = str(font_name).strip()
+    # strip path and extension, turn hyphen/underscore into space
+    import os as _os
+
+    base = _os.path.basename(base)
+    if "." in base:
+        base = base.rsplit(".", 1)[0]
+    base = base.replace("-", " ").replace("_", " ").strip()
+    return base or "Arial"
+
+
+def _ass_alignment_from_style(style) -> int:
+    """Map subtitle position to ASS Alignment (1..9)."""
+    try:
+        pos = str(getattr(style, "position", "") or "").lower()
+        # also handle enum values like SubtitlePosition.BOTTOM
+        pos = pos.split(".")[-1]
+    except Exception:
+        pos = "bottom"
+    if pos in ("top",):
+        return 8  # top center
+    if pos in ("center", "middle"):
+        return 5  # middle center
+    # bottom, dynamic, custom all default to bottom center
+    return 2
+
+
+def _build_ass_dialogue_text(
+    phrase: str,
+    phrase_start: float,
+    phrase_end: float,
+    style,
+    word_timings: Optional[List],
+) -> str:
+    """Build ASS dialogue text with optional {\\k} karaoke from word timings."""
+    if not phrase:
+        return ""
+    base = _ass_escape_text(phrase)
+    # no highlight or no timings -> plain
+    if not getattr(style, "active_word_highlight", False) or not word_timings:
+        return base
+    try:
+        from app.services.subtitle_engine.timing import match_words_to_phrase
+
+        words = match_words_to_phrase(word_timings, phrase, float(phrase_start), float(phrase_end))
+    except Exception:
+        return base
+    if not words:
+        return base
+    # Build karaoke: each word becomes {\k<dur>}word
+    # \k is centiseconds (10ms). Use word duration.
+    parts: List[str] = []
+    for word in words:
+        dur_cs = max(1, int(round((float(word.end) - float(word.start)) * 100)))
+        # escape per-word text separately
+        word_text = _ass_escape_text(word.text)
+        parts.append(f"{{\\k{dur_cs}}}{word_text}")
+        # preserve a space between words (karaoke expects spaces outside tags)
+        parts.append(" ")
+    karaoke = "".join(parts).strip()
+    # If karaoke word count mismatched due to tokenization differences, fallback
+    # to plain to avoid losing characters.
+    if not karaoke:
+        return base
+    # Heuristic: if karaoke covers drastically fewer chars, keep plain
+    plain_chars = len("".join(ch for ch in phrase if ch.strip()))
+    karaoke_chars = len("".join(w.text for w in words))
+    if karaoke_chars < max(1, plain_chars * 0.5):
+        return base
+    return karaoke
+
+
+def build_ass_content(
+    subtitle_items,
+    video_width: int,
+    video_height: int,
+    style,
+    word_timings: Optional[List] = None,
+) -> str:
+    """Build ASS file content from subtitle items and style.
+
+    subtitle_items: iterable of ((start, end), text) or (start, end, text)
+    """
+    vw = max(1, int(video_width))
+    vh = max(1, int(video_height))
+    font_name = _ass_font_name(style)
+    font_size = int(getattr(style, "font_size", 60) or 60)
+    # clamp font size to reasonable range for ASS (libass scales with PlayRes)
+    font_size = max(12, min(160, font_size))
+    primary = _hex_to_ass_color(getattr(style, "color", "#FFFFFF") or "#FFFFFF", 0.0)
+    secondary = _hex_to_ass_color(
+        getattr(style, "highlight_color", "#FFD60A") or "#FFD60A", 0.0
+    )
+    outline = _hex_to_ass_color(
+        getattr(style, "outline_color", "#000000") or "#000000", 0.0
+    )
+    # background: opacity from style, invert for ASS alpha
+    bg_raw = getattr(style, "background", None)
+    # style.background may be None or "#RRGGBB"
+    if bg_raw:
+        bg_opacity = 1.0 - float(getattr(style, "background_opacity", 0.55) or 0.55)
+        # clamp 0 transparent …1 opaque for ASS alpha? Actually we computed alpha as transparency
+        # So bg alpha = 1 - opacity -> transparency
+        back = _hex_to_ass_color(str(bg_raw), max(0.0, min(1.0, bg_opacity)))
+        border_style = 3  # opaque box
+    else:
+        back = _hex_to_ass_color("#000000", 1.0)  # fully transparent
+        border_style = 1  # outline only
+    outline_width = max(0, float(getattr(style, "outline_width", 1.5) or 1.5))
+    alignment = _ass_alignment_from_style(style)
+    # Margins: use vertical_offset to shift MarginV
+    try:
+        v_offset = int(getattr(style, "vertical_offset", 0) or 0)
+    except Exception:
+        v_offset = 0
+    # For bottom alignment, MarginV is distance from bottom; for top, from top.
+    # Keep base 24px plus offset (negative moves up for bottom)
+    base_margin_v = 24
+    if alignment == 2:  # bottom
+        margin_v = max(0, base_margin_v - v_offset)
+    elif alignment == 8:  # top
+        margin_v = max(0, base_margin_v + v_offset)
+    else:
+        margin_v = base_margin_v
+    # Bold detection: font name contains Bold
+    bold = -1 if "bold" in font_name.lower() else 0
+    # Header
+    lines: List[str] = []
+    lines.append("[Script Info]")
+    lines.append("Title: ReelSync Subtitles")
+    lines.append("ScriptType: v4.00+")
+    lines.append(f"PlayResX: {vw}")
+    lines.append(f"PlayResY: {vh}")
+    lines.append("WrapStyle: 0")
+    lines.append("ScaledBorderAndShadow: yes")
+    lines.append("YCbCr Matrix: TV.709")
+    lines.append("")
+    lines.append("[V4+ Styles]")
+    lines.append(
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+        "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+        "MarginL, MarginR, MarginV, Encoding"
+    )
+    style_line = (
+        f"Style: Default,{font_name},{font_size},{primary},{secondary},"
+        f"{outline},{back},{bold},0,0,0,100,100,0,0,{border_style},"
+        f"{outline_width:.1f},0,{alignment},20,20,{margin_v},1"
+    )
+    lines.append(style_line)
+    lines.append("")
+    lines.append("[Events]")
+    lines.append(
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
+    )
+    for item in subtitle_items or []:
+        try:
+            if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], (list, tuple)):
+                (start, end), text = item
+            elif isinstance(item, tuple) and len(item) == 3:
+                start, end, text = item
+            else:
+                continue
+            start_f = float(start)
+            end_f = float(end)
+            if end_f <= start_f or not text:
+                continue
+            # apply casing already done by caller? Ensure we use text as-is
+            dialogue_text = _build_ass_dialogue_text(
+                str(text), start_f, end_f, style, word_timings
+            )
+            # escape newlines -> \N
+            dialogue_text = dialogue_text.replace("\n", r"\N")
+            lines.append(
+                f"Dialogue: 0,{_format_ass_time(start_f)},{_format_ass_time(end_f)},"
+                f"Default,,0,0,0,,{dialogue_text}"
+            )
+        except Exception as exc:
+            logger.debug(f"skip ASS dialogue item due to error: {exc}")
+            continue
+    return "\n".join(lines) + "\n"
+
+
+def generate_ass_file(
+    subtitle_path: str,
+    output_ass_path: str,
+    video_width: int,
+    video_height: int,
+    style,
+    word_timings: Optional[List] = None,
+) -> bool:
+    """Generate ASS sidecar from SRT + word timings. Returns True on success.
+
+    Tries pysubs2 if available for higher fidelity, otherwise falls back to
+    manual ASS generation. Never raises — failures are logged and return False.
+    """
+    try:
+        # Prefer pysubs2 when installed (optional dependency)
+        try:
+            import pysubs2  # type: ignore
+
+            # pysubs2 path: load SRT and convert, then inject karaoke if needed
+            subs = pysubs2.load(subtitle_path, encoding="utf-8")
+            # ensure PlayRes
+            subs.info["PlayResX"] = str(int(video_width))
+            subs.info["PlayResY"] = str(int(video_height))
+            # Convert styles if needed — keep default style from style object
+            # Fallback to manual generation if karaoke requested but complex
+            if getattr(style, "active_word_highlight", False) and word_timings:
+                # pysubs2 karaoke injection is non-trivial; use manual builder for karaoke
+                raise ImportError("use manual for karaoke")
+            # otherwise use pysubs2 dump with custom style
+            # Minimal: just dump and return
+            # Build a simple style override via manual header injection is easier -> manual
+            raise ImportError("prefer manual for style fidelity")
+        except Exception:
+            pass
+
+        # Manual path: parse SRT via subtitle file_to_subtitles helper
+        try:
+            from app.services.subtitle import file_to_subtitles as _file_to_subtitles
+
+            srt_items = _file_to_subtitles(subtitle_path)
+            # convert to ((start,end), text) with numeric times
+
+            def _srt_to_sec(value: str) -> float:
+                value = str(value or "").strip()
+                try:
+                    h, m, s = value.split(":")
+                    s, _, ms = s.partition(",")
+                    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms or 0) / 1000.0
+                except Exception:
+                    return 0.0
+
+            numeric_items = []
+            for _, times, text in srt_items:
+                if "-->" not in times:
+                    continue
+                a, _, b = times.partition("-->")
+                numeric_items.append((( _srt_to_sec(a), _srt_to_sec(b)), text))
+        except Exception:
+            # fallback: read via moviepy SubtitlesClip if parser failed
+            numeric_items = []
+
+        if not numeric_items:
+            logger.warning(f"no subtitle items to generate ASS: {subtitle_path}")
+            return False
+
+        content = build_ass_content(
+            numeric_items, int(video_width), int(video_height), style, word_timings
+        )
+        # write atomically
+        import os as _os
+
+        tmp = output_ass_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fp:
+            fp.write(content)
+        _os.replace(tmp, output_ass_path)
+        logger.info(f"ASS subtitle sidecar generated: {output_ass_path}")
+        return True
+    except Exception as exc:
+        logger.warning(
+            f"failed to generate ASS sidecar: {output_ass_path}, "
+            f"error={type(exc).__name__}: {exc}"
+        )
+        return False

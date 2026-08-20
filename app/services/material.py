@@ -1,11 +1,14 @@
+import json
 import os
 import random
 import re
+import tempfile
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 import requests
@@ -17,7 +20,11 @@ from app.models.schema import MaterialInfo, VideoAspect, VideoConcatMode
 from app.services import material_cache, task_artifacts
 from app.services.media_utils import (
     get_tls_verify as _get_tls_verify,
+)
+from app.services.media_utils import (
     redact_request_error as _redact_request_error,
+)
+from app.services.media_utils import (
     safe_public_url as _safe_public_url,
 )
 from app.utils import utils
@@ -290,9 +297,9 @@ def _matches_video_aspect(
 
 
 def _filter_materials_by_aspect(
-    items: List[MaterialInfo],
+    items: list[MaterialInfo],
     video_aspect: VideoAspect,
-) -> List[MaterialInfo]:
+) -> list[MaterialInfo]:
     """
     对缓存结果再次校验方向。
 
@@ -324,7 +331,7 @@ def search_videos_pexels(
     search_term: str,
     minimum_duration: int,
     video_aspect: VideoAspect = VideoAspect.portrait,
-) -> List[MaterialInfo]:
+) -> list[MaterialInfo]:
     aspect = VideoAspect(video_aspect)
     video_orientation = aspect.name
     video_width, video_height = aspect.to_resolution()
@@ -413,7 +420,7 @@ def search_videos_pixabay(
     search_term: str,
     minimum_duration: int,
     video_aspect: VideoAspect = VideoAspect.portrait,
-) -> List[MaterialInfo]:
+) -> list[MaterialInfo]:
     aspect = VideoAspect(video_aspect)
 
     video_width, video_height = aspect.to_resolution()
@@ -546,7 +553,7 @@ def search_videos_coverr(
     search_term: str,
     minimum_duration: int,
     video_aspect: VideoAspect = VideoAspect.portrait,
-) -> List[MaterialInfo]:
+) -> list[MaterialInfo]:
     """
     Coverr (https://coverr.co) - free HD/4K stock videos,
     subject to Coverr license terms (https://coverr.co/license).
@@ -590,7 +597,7 @@ def search_videos_coverr(
             timeout=(30, 60),
         )
         response = r.json()
-        video_items: List[MaterialInfo] = []
+        video_items: list[MaterialInfo] = []
 
         if not isinstance(response, dict) or "hits" not in response:
             logger.error("coverr video search returned an unsupported response")
@@ -703,26 +710,85 @@ def save_video(video_url: str, save_dir: str = "") -> str:
                     f"failed to download material from {_redact_video_url(video_url)}: status={resp.status_code}"
                 )
                 return ""
-            with open(video_path, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            if os.path.getsize(video_path) == 0:
-                logger.warning(
-                    f"downloaded empty file from {_redact_video_url(video_url)}"
+            tmp_fd = None
+            tmp_path = ""
+            try:
+                tmp_fd, tmp_path = tempfile.mkstemp(
+                    dir=save_dir, prefix=f"{video_id}.", suffix=".tmp"
                 )
                 try:
-                    os.remove(video_path)
+                    with os.fdopen(tmp_fd, "wb") as f:
+                        tmp_fd = None
+                        for chunk in resp.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                except Exception:
+                    if tmp_fd is not None:
+                        try:
+                            os.close(tmp_fd)
+                        except OSError:
+                            pass
+                        tmp_fd = None
+                    raise
+                if os.path.getsize(tmp_path) == 0:
+                    logger.warning(
+                        f"downloaded empty file from {_redact_video_url(video_url)}"
+                    )
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+                    return ""
+                try:
+                    # Use hard link as atomic exclusive claim (no 0-byte placeholder window)
+                    os.link(tmp_path, video_path)
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+                except FileExistsError:
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+                    if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
+                        logger.info(f"material already exists (race): {video_path}")
+                        return video_path
+                    return ""
                 except OSError:
-                    pass
-                return ""
+                    # Fallback for filesystems where link not supported; avoid overwriting existing
+                    if os.path.exists(video_path):
+                        try:
+                            os.remove(tmp_path)
+                        except OSError:
+                            pass
+                        if os.path.getsize(video_path) > 0:
+                            logger.info(f"material already exists (race): {video_path}")
+                            return video_path
+                        return ""
+                    try:
+                        os.replace(tmp_path, video_path)
+                    except OSError:
+                        try:
+                            os.remove(tmp_path)
+                        except OSError:
+                            pass
+                        raise
+            finally:
+                if tmp_fd is not None:
+                    try:
+                        os.close(tmp_fd)
+                    except OSError:
+                        pass
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        if os.path.abspath(tmp_path) != os.path.abspath(video_path):
+                            os.remove(tmp_path)
+                    except OSError:
+                        pass
             break
         except Exception as exc:
             last_error = exc
-            if os.path.exists(video_path):
-                try:
-                    os.remove(video_path)
-                except OSError:
-                    pass
             if attempt < _REQUEST_RETRY_ATTEMPTS:
                 time.sleep(_REQUEST_RETRY_BASE_DELAY_SECONDS * (2**attempt))
                 continue
@@ -739,6 +805,7 @@ def save_video(video_url: str, save_dir: str = "") -> str:
             duration = clip.duration
             fps = clip.fps
             if duration > 0 and fps > 0:
+                _enforce_video_cache_limit_quietly()
                 return video_path
         except Exception:
             pass
@@ -759,6 +826,7 @@ def save_video(video_url: str, save_dir: str = "") -> str:
                 img_path = f"{save_dir}/{video_id}.{img_ext}"
             os.replace(video_path, img_path)
             logger.info(f"material saved as image: {img_path}")
+            _enforce_video_cache_limit_quietly()
             return img_path
         except Exception as img_err:
             logger.warning(
@@ -845,13 +913,87 @@ def _validate_scraped_video(video_path: str) -> str:
     return ""
 
 
+def _get_synonym_terms(search_term: str) -> list[str]:
+    """
+    Ask LLM for 2 synonyms/alternative visual search terms. Bounded to max 1 call
+    per original term to avoid cost explosion.
+    """
+
+    if not search_term or not search_term.strip():
+        return []
+    try:
+        from app.services import llm as _llm_svc
+    except Exception as exc:  # pragma: no cover - import failure
+        logger.warning(f"synonym expansion unavailable: {exc}")
+        return []
+    prompt = (
+        f'Provide 2 concise synonyms or alternative visual search terms for "{search_term.strip()}" '
+        f"suitable for stock video search. "
+        f'Return ONLY a JSON array of 2 strings, no explanation. '
+        f'Example: ["synonym1", "synonym2"]'
+    )
+    try:
+        response = _llm_svc._generate_response(prompt)
+        if not isinstance(response, str) or not response.strip():
+            return []
+        if response.startswith("Error:"):
+            logger.warning(
+                f"synonym expansion LLM error for {search_term!r}: {response[:200]}"
+            )
+            return []
+        cleaned = response.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```[a-zA-Z0-9]*\s*", "", cleaned)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+            cleaned = cleaned.strip()
+        try:
+            terms = json.loads(cleaned)
+        except Exception:
+            match = re.search(r"\[.*\]", cleaned, re.DOTALL)
+            if not match:
+                return []
+            terms = json.loads(match.group())
+        if not isinstance(terms, list):
+            return []
+        result: list[str] = []
+        seen: set[str] = set()
+        lower_original = search_term.strip().lower()
+        for t in terms:
+            if not isinstance(t, str):
+                continue
+            norm = t.strip()
+            if not norm or norm.lower() == lower_original or norm.lower() in seen:
+                continue
+            seen.add(norm.lower())
+            result.append(norm)
+            if len(result) >= 2:
+                break
+        return result
+    except Exception as exc:
+        logger.warning(
+            f"failed to get synonyms for {search_term!r}: {type(exc).__name__}: {exc}"
+        )
+        return []
+
+
+def _enforce_video_cache_limit_quietly() -> None:
+    """Best-effort LRU enforcement; never raises to caller."""
+
+    try:
+        from app.services import cache_manager as _cache_mgr
+
+        _cache_mgr.enforce_cache_limit()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(f"cache LRU enforcement failed: {exc}")
+
+
 def _search_videos_with_cache(
     provider: str,
-    search_videos: Callable[..., List[MaterialInfo]],
+    search_videos: Callable[..., list[MaterialInfo]],
     search_term: str,
     minimum_duration: int,
     video_aspect: VideoAspect,
-) -> List[MaterialInfo]:
+) -> list[MaterialInfo]:
     """
     统一处理三个在线素材源的 24 小时搜索缓存。
 
@@ -866,7 +1008,7 @@ def _search_videos_with_cache(
         "video_aspect": video_aspect,
     }
 
-    def load_cache_safely() -> List[MaterialInfo] | None:
+    def load_cache_safely() -> list[MaterialInfo] | None:
         try:
             return material_cache.load_material_search_cache(**cache_args)
         except Exception as exc:
@@ -878,7 +1020,7 @@ def _search_videos_with_cache(
             )
             return None
 
-    def load_matching_cache() -> tuple[List[MaterialInfo] | None, int]:
+    def load_matching_cache() -> tuple[list[MaterialInfo] | None, int]:
         cached_items = load_cache_safely()
         if cached_items is None:
             return None, 0
@@ -942,7 +1084,7 @@ def _search_videos_custom_api_with_fallback(
     search_term: str,
     minimum_duration: int,
     video_aspect: VideoAspect,
-) -> List[MaterialInfo]:
+) -> list[MaterialInfo]:
     """
     Attempt the user-configured custom API first.
 
@@ -952,7 +1094,7 @@ def _search_videos_custom_api_with_fallback(
     standard stock footage is always available as a safety net.
     """
     # Local import to avoid circular dependency at module load time.
-    from app.services import custom_media as _custom_media_svc  # noqa: PLC0415
+    from app.services import custom_media as _custom_media_svc
 
     items = _search_videos_with_cache(
         provider="custom_api",
@@ -1024,7 +1166,7 @@ def _relevance_penalty(item: MaterialInfo) -> float:
 _ORIENTATION_MISMATCH_PENALTY = 20.0
 
 
-def _material_dimensions(item: MaterialInfo) -> Optional[Tuple[int, int]]:
+def _material_dimensions(item: MaterialInfo) -> tuple[int, int] | None:
     """Best-effort width/height from search-time metadata, or None if unknown.
 
     Web 抓取素材在搜索阶段把尺寸写入 resolution 字段；库存供应商则放在
@@ -1053,7 +1195,7 @@ def _material_dimensions(item: MaterialInfo) -> Optional[Tuple[int, int]]:
     return None
 
 
-def _material_orientation(item: MaterialInfo) -> Optional[str]:
+def _material_orientation(item: MaterialInfo) -> str | None:
     """素材方向：portrait / landscape / square，未知时返回 None。"""
     dimensions = _material_dimensions(item)
     if not dimensions:
@@ -1064,7 +1206,7 @@ def _material_orientation(item: MaterialInfo) -> Optional[str]:
     return "portrait" if height > width else "landscape"
 
 
-def _aspect_orientation(video_aspect: VideoAspect) -> Optional[str]:
+def _aspect_orientation(video_aspect: VideoAspect) -> str | None:
     """目标画幅的方向，与 _matches_video_aspect（web_scrape）同口径。"""
     try:
         width, height = VideoAspect(video_aspect).to_resolution()
@@ -1076,8 +1218,8 @@ def _aspect_orientation(video_aspect: VideoAspect) -> Optional[str]:
 
 
 def _rank_and_select_best_material(
-    candidates: List[MaterialInfo], required_duration: int, video_aspect: VideoAspect
-) -> List[MaterialInfo]:
+    candidates: list[MaterialInfo], required_duration: int, video_aspect: VideoAspect
+) -> list[MaterialInfo]:
     """
     相关性优先：先按素材与脚本搜索词的贴合度排序，再用来源优先级、
     时长接近度和分辨率作为同分时的次级依据。
@@ -1086,6 +1228,8 @@ def _rank_and_select_best_material(
         return []
 
     # Priority mapping (lower number is higher priority)
+    # web_scrape platform-aware search (YouTube vs TikTok) and embedding ranking are
+    # handled inside web_scrape.search_videos_web_scrape; here we keep provider as tiebreak only.
     provider_priority = {
         "custom_api": 0,
         "pexels": 1,
@@ -1154,7 +1298,7 @@ def _rank_and_select_best_material(
     return ranked
 
 
-def _auto_provider_configs() -> List[tuple[str, Callable]]:
+def _auto_provider_configs() -> list[tuple[str, Callable]]:
     """
     返回 auto 来源实际启用的素材供应商列表。
 
@@ -1169,7 +1313,7 @@ def _auto_provider_configs() -> List[tuple[str, Callable]]:
     """
     from app.services import custom_media as _custom_media_svc
 
-    providers: List[tuple[str, Callable]] = []
+    providers: list[tuple[str, Callable]] = []
     if _custom_media_svc.is_custom_api_configured():
         providers.append(("custom_api", _custom_media_svc.search_media_custom_api))
     if config.app.get("pexels_api_keys"):
@@ -1202,7 +1346,7 @@ def _search_videos_auto_all_sources(
     minimum_duration: int,
     video_aspect: VideoAspect,
     failed_providers: set[str] | None = None,
-) -> List[MaterialInfo]:
+) -> list[MaterialInfo]:
     """
     Concurrently query all configured providers and rank the results.
 
@@ -1225,7 +1369,7 @@ def _search_videos_auto_all_sources(
         )
         return []
 
-    all_candidates: List[MaterialInfo] = []
+    all_candidates: list[MaterialInfo] = []
 
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=min(len(providers), _AUTO_SEARCH_MAX_WORKERS) or 1
@@ -1292,6 +1436,7 @@ def _download_material_item(
         )
     if item.provider == "web_scrape":
         import hashlib
+
         from app.services import web_scrape as _web_scrape_svc
 
         # Generate unique filename for the scraped video
@@ -1326,8 +1471,8 @@ def _download_with_concurrent_prefix(
     material_directory: str,
     max_clip_duration: int,
     audio_duration: float,
-    video_paths: List[str],
-    material_sources: List[dict[str, Any]],
+    video_paths: list[str],
+    material_sources: list[dict[str, Any]],
 ) -> float:
     """有界并发下载 ``tasks``（``(item, search_term_or_None)``，顺序即串行处理顺序）。
 
@@ -1360,6 +1505,7 @@ def _download_with_concurrent_prefix(
                     f"error={type(source_error).__name__}, detail={source_error}"
                 )
             total_duration += min(max_clip_duration, item.duration)
+            _enforce_video_cache_limit_quietly()
 
     def log_failure(item, search_term, error) -> None:
         log_key = "ordered " if search_term is not None else ""
@@ -1421,7 +1567,7 @@ def _download_with_concurrent_prefix(
 
 def download_videos(
     task_id: str,
-    search_terms: List[str],
+    search_terms: list[str],
     source: str = "pexels",
     video_aspect: VideoAspect = VideoAspect.portrait,
     video_concat_mode: VideoConcatMode = VideoConcatMode.random,
@@ -1429,9 +1575,10 @@ def download_videos(
     max_clip_duration: int = 5,
     match_script_order: bool = False,
     allow_images: bool = True,
-    grouped_search_terms: List[List[str]] | None = None,
-    scene_narrations: List[str] | None = None,
-) -> List[str]:
+    grouped_search_terms: list[list[str]] | None = None,
+    scene_narrations: list[str] | None = None,
+    scene_durations: list[float] | None = None,
+) -> list[str]:
     provider = "pexels"
     remote_search_videos = search_videos_pexels
     if source == "pixabay":
@@ -1462,7 +1609,7 @@ def download_videos(
         minimum_duration: int,
         video_aspect: VideoAspect,
         failed_providers: set[str] | None = None,
-    ) -> List[MaterialInfo]:
+    ) -> list[MaterialInfo]:
         if provider == "custom_api":
             items = _search_videos_custom_api_with_fallback(
                 search_term=search_term,
@@ -1498,6 +1645,56 @@ def download_videos(
                 for item in items
                 if not _is_image_material(item)
             ]
+        # Second-pass synonym search: if no results, ask LLM for 2 alternatives and retry once
+        if not items:
+            synonyms = _get_synonym_terms(search_term)
+            for syn in synonyms:
+                logger.info(
+                    f"synonym fallback: {search_term!r} -> {syn!r} (provider={provider})"
+                )
+                try:
+                    if provider == "custom_api":
+                        retry_items = _search_videos_custom_api_with_fallback(
+                            search_term=syn,
+                            minimum_duration=minimum_duration,
+                            video_aspect=video_aspect,
+                        )
+                    elif provider == "pollinations":
+                        from app.services import custom_media as _custom_media_svc2
+
+                        retry_items = _custom_media_svc2.search_media_pollinations(
+                            search_term=syn,
+                            minimum_duration=minimum_duration,
+                            video_aspect=video_aspect,
+                        )
+                    elif provider == "auto":
+                        retry_items = _search_videos_auto_all_sources(
+                            search_term=syn,
+                            minimum_duration=minimum_duration,
+                            video_aspect=video_aspect,
+                            failed_providers=failed_providers,
+                        )
+                    else:
+                        retry_items = _search_videos_with_cache(
+                            provider=provider,
+                            search_videos=remote_search_videos,
+                            search_term=syn,
+                            minimum_duration=minimum_duration,
+                            video_aspect=video_aspect,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        f"synonym search failed for {syn!r}: {type(exc).__name__}: {exc}"
+                    )
+                    continue
+                if not allow_images:
+                    retry_items = [
+                        item
+                        for item in retry_items
+                        if not _is_image_material(item)
+                    ]
+                if retry_items:
+                    return retry_items
         return items
 
     material_directory = config.app.get("material_directory", "").strip()
@@ -1515,6 +1712,7 @@ def download_videos(
             task_id=task_id,
             grouped_search_terms=grouped_search_terms,
             scene_narrations=scene_narrations,
+            scene_durations=scene_durations,
             search_videos=search_videos,
             video_aspect=video_aspect,
             audio_duration=audio_duration,
@@ -1581,14 +1779,14 @@ def download_videos(
 
 def _download_videos_by_script_order(
     task_id: str,
-    search_terms: List[str],
+    search_terms: list[str],
     search_videos,
     video_aspect: VideoAspect,
     audio_duration: float,
     max_clip_duration: int,
     material_directory: str,
     failed_providers: set[str] | None = None,
-) -> List[str]:
+) -> list[str]:
     """
     按脚本文案顺序下载素材。
 
@@ -1657,15 +1855,16 @@ def _download_videos_by_script_order(
 
 def _download_videos_grouped(
     task_id: str,
-    grouped_search_terms: List[List[str]],
-    scene_narrations: List[str] | None,
+    grouped_search_terms: list[list[str]],
+    scene_narrations: list[str] | None,
     search_videos,
     video_aspect: VideoAspect,
     audio_duration: float,
     max_clip_duration: int,
     material_directory: str,
     failed_providers: set[str] | None = None,
-) -> List[str]:
+    scene_durations: list[float] | None = None,
+) -> list[str]:
     """
     按场景分组精准下载：每个场景的搜索词只为该场景服务，素材按场景顺序
     连续排列，确保最终成片的画面时序与文案段落一一对应。
@@ -1679,7 +1878,7 @@ def _download_videos_grouped(
         f"audio_duration={audio_duration:.1f}s"
     )
     # 按场景收集候选，避免跨场景 dedup 丢失场景归属
-    scene_candidates: List[List[tuple[MaterialInfo, str]]] = []
+    scene_candidates: list[list[tuple[MaterialInfo, str]]] = []
     valid_urls: set[str] = set()
     total_candidates = 0
 
@@ -1692,7 +1891,7 @@ def _download_videos_grouped(
             narration_preview = scene_narrations[scene_idx][:80].replace("\n", " ")
         logger.info(f"scene {scene_idx} terms={scene_terms} | narration: {narration_preview}")
 
-        scene_items: List[tuple[MaterialInfo, str]] = []
+        scene_items: list[tuple[MaterialInfo, str]] = []
         for search_term in scene_terms:
             if not search_term or not search_term.strip():
                 continue
@@ -1715,8 +1914,18 @@ def _download_videos_grouped(
         logger.warning("no candidates found for grouped scene terms, falling back to flat")
         return []
 
-    # 按文案长度比例计算每场景目标时长，确保短场景不抢长场景素材
-    if scene_narrations and len(scene_narrations) == len(grouped_search_terms) and audio_duration > 0:
+    # 9.0+ 精准时长：优先使用基于 word timings 的 scene_durations，否则回退字符比例
+    if (
+        scene_durations
+        and len(scene_durations) == len(grouped_search_terms)
+        and audio_duration > 0
+        and all(isinstance(d, (int, float)) and d > 0 for d in scene_durations)
+    ):
+        total = sum(scene_durations) or 1
+        scale = audio_duration / total if total else 1
+        scene_targets = [float(d) * scale for d in scene_durations]
+        logger.info(f"using word-timing scene durations: {[round(t, 2) for t in scene_targets]}")
+    elif scene_narrations and len(scene_narrations) == len(grouped_search_terms) and audio_duration > 0:
         total_chars = sum(len(n) for n in scene_narrations) or 1
         scene_targets = [
             audio_duration * len(n) / total_chars for n in scene_narrations
@@ -1725,9 +1934,53 @@ def _download_videos_grouped(
         per_scene = audio_duration / max(1, len(grouped_search_terms)) if audio_duration > 0 else 5.0
         scene_targets = [per_scene] * len(grouped_search_terms)
 
+    # 可选的 TwelveLabs 视觉相关性重排：若配置了 twelvelabs_api_keys，
+    # 按场景旁白对候选素材做语义重排，使画面更贴合文案。未启用或失败时保持原序。
+    if scene_narrations and any(scene_narrations):
+        try:
+            from app.services import twelvelabs as _twelvelabs  # noqa: I001  # lazy to avoid circular import
+
+            if _twelvelabs.is_enabled():
+                import math as _math
+
+                for _scene_idx, _scene_items in enumerate(scene_candidates):
+                    if not _scene_items:
+                        continue
+                    _narration = ""
+                    if scene_narrations and _scene_idx < len(scene_narrations):
+                        _narration = str(scene_narrations[_scene_idx] or "").strip()
+                    if not _narration:
+                        continue
+                    _narration_vec = _twelvelabs.embed_text(_narration)
+                    if not _narration_vec:
+                        continue
+                    _scored: list[tuple] = []
+                    for _item, _term in _scene_items:
+                        _text = _relevance_text(_item) or str(_term or "")
+                        _vec = _twelvelabs.embed_text(_text) if _text else None
+                        if _vec is None:
+                            _scored.append((_item, _term, -1.0))
+                        else:
+                            _dot = sum(x * y for x, y in zip(_narration_vec, _vec))
+                            _na = _math.sqrt(sum(x * x for x in _narration_vec))
+                            _nb = _math.sqrt(sum(y * y for y in _vec))
+                            _cos = _dot / (_na * _nb) if _na and _nb else 0.0
+                            _scored.append((_item, _term, _cos))
+                    _scored.sort(key=lambda _x: _x[2], reverse=True)
+                    scene_candidates[_scene_idx] = [(_it, _tm) for _it, _tm, _ in _scored]
+                    logger.info(
+                        f"twelvelabs reranked scene {_scene_idx} candidates: "
+                        f"{len(_scored)} items by narration relevance"
+                    )
+        except Exception as _exc:  # noqa: BLE001 - optional feature never blocks pipeline
+            logger.warning(
+                f"twelvelabs scene rerank skipped: "
+                f"error={type(_exc).__name__}, detail={_exc}"
+            )
+
     # 每场景按目标时长截取候选，剩余候选作为溢出池按场景顺序追加
-    ordered_tasks: List[tuple[MaterialInfo, str]] = []
-    overflow: List[tuple[MaterialInfo, str]] = []
+    ordered_tasks: list[tuple[MaterialInfo, str]] = []
+    overflow: list[tuple[MaterialInfo, str]] = []
     for scene_idx, scene_items in enumerate(scene_candidates):
         target = scene_targets[scene_idx] if scene_idx < len(scene_targets) else 5.0
         acc = 0.0
@@ -1751,7 +2004,7 @@ def _download_videos_grouped(
         f"required duration={audio_duration:.1f}s"
     )
 
-    video_paths: List[str] = []
+    video_paths: list[str] = []
     material_sources: list[dict[str, Any]] = []
     _download_with_concurrent_prefix(
         tasks=ordered_tasks,
