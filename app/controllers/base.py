@@ -1,3 +1,4 @@
+import hmac
 from uuid import uuid4
 
 from fastapi import Depends, Request
@@ -19,15 +20,14 @@ def get_api_key(request: Request):
 
 
 def verify_token(request: Request):
-    token = get_api_key(request)
-    if token != config.app.get("api_key", ""):
+    token = get_api_key(request) or ""
+    expected = config.app.get("api_key", "") or ""
+    if not hmac.compare_digest(token, expected):
         request_id = get_task_id(request)
-        request_url = request.url
-        user_agent = request.headers.get("user-agent")
         raise HttpException(
             task_id=request_id,
             status_code=401,
-            message=f"invalid token: {request_url}, {user_agent}",
+            message="invalid token",
         )
 
 

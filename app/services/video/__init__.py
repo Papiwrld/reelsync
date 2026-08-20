@@ -158,6 +158,65 @@ def _get_video_encode_args() -> dict:
     return args
 
 
+_X264_TO_NVENC_PRESET = {
+    "ultrafast": "p1",
+    "superfast": "p2",
+    "veryfast": "p3",
+    "faster": "p3",
+    "fast": "p4",
+    "medium": "p4",
+    "slow": "p5",
+    "slower": "p6",
+    "veryslow": "p7",
+    "placebo": "p7",
+}
+
+_NVENC_VALID_PRESETS = {
+    "p1",
+    "p2",
+    "p3",
+    "p4",
+    "p5",
+    "p6",
+    "p7",
+    "hp",
+    "hq",
+    "ll",
+    "llhp",
+    "llhq",
+    "bd",
+    "default",
+    "fast",
+    "medium",
+    "slow",
+}
+
+
+def _map_preset_for_codec(preset: str, codec: str) -> str:
+    """Map x264 preset to hardware equivalent, passthrough if already valid.
+
+    libx264 uses ``ultrafast..placebo`` while ``h264_nvenc`` expects
+    ``p1-p7``/``fast``/``medium``/``slow``/``hq``. Passing an x264 preset
+    verbatim to nvenc triggers an ffmpeg error and forces a costly fallback.
+    This helper translates known x264 presets to their nvenc equivalents and
+    leaves already-valid nvenc presets (p1-p7, hp/hq etc.) untouched.
+    """
+    if codec == _DEFAULT_VIDEO_CODEC or codec == "copy":
+        return preset
+    preset_str = str(preset).strip()
+    if not preset_str:
+        return preset_str
+    low = preset_str.lower()
+    if low in _NVENC_VALID_PRESETS:
+        return low
+    mapped = _X264_TO_NVENC_PRESET.get(low)
+    if mapped is not None:
+        return mapped
+    if codec == "h264_nvenc":
+        return "p4"
+    return preset_str
+
+
 @lru_cache(maxsize=16)
 def _ffmpeg_encoder_exists(ffmpeg_binary: str, codec: str) -> bool:
     """
@@ -261,6 +320,8 @@ def _translate_encode_args(kwargs: dict, codec: str) -> dict:
         params = list(translated.get("ffmpeg_params") or [])
         params.extend(["-crf", str(crf)])
         translated["ffmpeg_params"] = params
+    if "preset" in translated and codec != _DEFAULT_VIDEO_CODEC and codec != "copy":
+        translated["preset"] = _map_preset_for_codec(translated["preset"], codec)
     return translated
 
 
@@ -355,10 +416,17 @@ def concat_video_clips_with_ffmpeg(
         # copy 模式直接复制帧，不重新编码，也不需要指定像素格式/线程数。
         if codec != "copy":
             command.extend(["-threads", str(threads or 2), "-pix_fmt", "yuv420p"])
+            encode_args = _get_video_encode_args()
             if codec == _DEFAULT_VIDEO_CODEC:
-                encode_args = _get_video_encode_args()
                 command.extend(["-preset", str(encode_args.get("preset", _DEFAULT_VIDEO_PRESET))])
                 command.extend(["-crf", str(encode_args.get("crf", _DEFAULT_VIDEO_CRF))])
+                if encode_args.get("bitrate"):
+                    command.extend(["-b:v", str(encode_args["bitrate"])])
+            else:
+                preset = _map_preset_for_codec(
+                    str(encode_args.get("preset", _DEFAULT_VIDEO_PRESET)), codec
+                )
+                command.extend(["-preset", preset])
                 if encode_args.get("bitrate"):
                     command.extend(["-b:v", str(encode_args["bitrate"])])
         if max_duration is not None and max_duration > 0:

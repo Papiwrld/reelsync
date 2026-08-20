@@ -117,7 +117,7 @@ auto_providers = [ "custom_api", "pixabay", "coverr", "web_scrape", "pollination
 enable_pollinations = true
 
 [whisper]
-model_size = "large-v3"
+model_size = "small"
 device = "cpu"
 compute_type = "int8"
 

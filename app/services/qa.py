@@ -565,6 +565,11 @@ def run_quality_assurance(
 
     report.publication_blocked = any(
         issue.severity == QaSeverity.CRITICAL.value for issue in report.issues
+    ) or any(
+        issue.severity == QaSeverity.ERROR.value
+        and issue.category == "script"
+        and "conflicting" in issue.message.lower()
+        for issue in report.issues
     )
     counts: Dict[str, int] = {}
     for issue in report.issues:

@@ -24,6 +24,25 @@ from app.services import llm
 
 _AGENT_LLM_RETRIES = 3
 
+_PROVIDER_DEGRADED_TERMS = (
+    "401",
+    "429",
+    "quota",
+    "rate limit",
+    "auth",
+    "network",
+    "connection",
+    "timeout",
+)
+
+
+def _is_provider_failure(exc: Exception) -> bool:
+    msg = str(exc)
+    if msg.startswith("Error:"):
+        return True
+    lower = msg.lower()
+    return any(term in lower for term in _PROVIDER_DEGRADED_TERMS)
+
 
 class AgenticError(RuntimeError):
     """Base error for the agentic intelligence layers."""
@@ -105,7 +124,7 @@ def _llm_text(prompt: str, app_config=None, tracker: Optional[AgentTracker] = No
             raise
         except Exception as exc:  # noqa: BLE001 - providers raise heterogeneous errors
             last_error = exc
-            if tracker:
+            if tracker and _is_provider_failure(exc):
                 tracker.mark_degraded(f"{type(exc).__name__}: {exc}")
             logger.warning(f"agentic llm call failed (attempt {attempt + 1}): {exc}")
             # 指数退避 + 抖动，避免 429/限流时连发 3 次请求烧配额。

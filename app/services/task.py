@@ -69,6 +69,7 @@ _cross_post_slots = threading.BoundedSemaphore(_cross_post_max_pending_tasks)
 _cross_post_registry_lock = threading.RLock()
 _cross_post_futures: dict[str, Future] = {}
 _cross_post_process_owner = f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex}"
+_generation_process_owner = f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
 _ACTIVE_CROSS_POST_STATES = {
     const.CROSS_POST_STATE_PENDING,
     const.CROSS_POST_STATE_PROCESSING,
@@ -210,8 +211,13 @@ def _is_windows_process_alive(process_id: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
-def _is_cross_post_owner_alive(owner: str | None) -> bool:
-    """判断持久化发布任务的本机进程是否仍存在。"""
+def _is_owner_alive(owner: str | None) -> bool:
+    """通用进程存活探测，供生成与发布任务复用。
+
+    复用与跨发布相同的探测逻辑：hostname 不一致视为存活（无法探测远端）、
+    同进程视为已中断（重启后无活跃 Future/线程）、否则通过 Windows
+    只读 API 或 POSIX os.kill(pid,0) 判断。
+    """
     if not owner:
         return False
 
@@ -219,17 +225,16 @@ def _is_cross_post_owner_alive(owner: str | None) -> bool:
         hostname, process_id_text, _ = owner.split(":", 2)
         process_id = int(process_id_text)
     except (TypeError, ValueError):
-        logger.warning(f"invalid cross-post owner metadata: {owner}")
+        logger.warning(f"invalid owner metadata: {owner}")
         return False
 
     # 无法可靠探测其它主机上的进程。共享 Redis 的多主机部署中必须保守地
-    # 视为仍在运行，避免当前节点误删另一节点正在读取的视频文件。
+    # 视为仍在运行，避免当前节点误删另一节点正在执行的任务。
     if hostname != socket.gethostname():
         return True
 
-    # 当前进程内是否仍有真实发布工作，已经由 Future 注册表准确判断。运行到
-    # 这里说明注册表中没有对应 Future，即使 owner 与当前进程完全一致，也应
-    # 视为已中断；这可以覆盖终态写入持续失败、Future 已结束的场景。
+    # 当前进程内若 PID 一致但无活跃 Future/线程，视为已中断。生成与发布
+    # 在启动时均无正在执行的任务可检查，此分支确保重启后能正确回收。
     if process_id == os.getpid():
         return False
 
@@ -246,10 +251,20 @@ def _is_cross_post_owner_alive(owner: str | None) -> bool:
         return True
     except OSError as exc:
         logger.warning(
-            f"failed to inspect cross-post owner process, owner: {owner}, error: {exc}"
+            f"failed to inspect owner process, owner: {owner}, error: {exc}"
         )
         return True
     return True
+
+
+def _is_cross_post_owner_alive(owner: str | None) -> bool:
+    """判断持久化发布任务的本机进程是否仍存在。"""
+    return _is_owner_alive(owner)
+
+
+def _is_generation_owner_alive(owner: str | None) -> bool:
+    """判断视频生成任务的本机进程是否仍存在。复用与跨发布相同的探测逻辑。"""
+    return _is_owner_alive(owner)
 
 
 def _mark_task_failed(task_id: str, stage: str, error: str) -> dict:
@@ -279,6 +294,12 @@ def _mark_task_failed(task_id: str, stage: str, error: str) -> dict:
         "failed_stage": stage,
         "error": message,
     }
+    # Preserve generation ownership so caller snapshot matches persisted state
+    # and recovery logic can correctly identify the owning process.
+    if existing_task:
+        for _owner_key in ("generation_owner", "owner"):
+            if _owner_key in existing_task:
+                failure[_owner_key] = existing_task[_owner_key]
     sm.state.update_task(
         task_id,
         state=failure["state"],
@@ -1054,8 +1075,9 @@ def recover_interrupted_generation_tasks(page_size: int = 100) -> int | None:
     把这类任务标记为失败，保留已生成的视频结果，让用户看到明确终态。
 
     默认 MemoryState 启动即为空，此函数不会产生副作用；只有在 Redis 状态
-    持久化时才有实际作用。假设是单进程部署（本项目默认），启动瞬间不会有
-    本进程正在执行的任务被误伤。
+    持久化时才有实际作用。支持多副本部署：任务记录中若存在 generation_owner
+    /owner 字段，则仅当所属进程已不可达时才回收，避免滚动发布误删对端
+    正在执行的任务；无 owner 的历史任务沿用旧行为直接回收以兼容旧数据。
     """
     recovered = 0
     page = 1
@@ -1070,6 +1092,11 @@ def recover_interrupted_generation_tasks(page_size: int = 100) -> int | None:
         for task in tasks:
             task_id = str(task.get("task_id") or "")
             if not task_id or task.get("state") != const.TASK_STATE_PROCESSING:
+                continue
+            # 多副本滚动发布时，需避免误删对端仍在执行的任务。仅当 owner 存在
+            # 且探测为存活时跳过回收；无 owner 的历史数据保持旧行为直接回收。
+            owner = task.get("generation_owner") or task.get("owner")
+            if owner and _is_generation_owner_alive(owner):
                 continue
             updated = sm.state.patch_task(
                 task_id,
@@ -1306,7 +1333,13 @@ def _run_pipeline(
     voice_preview: dict | None = None,
 ):
     logger.info(f"start task: {task_id}, stop_at: {stop_at}")
-    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=5)
+    sm.state.update_task(
+        task_id,
+        state=const.TASK_STATE_PROCESSING,
+        progress=5,
+        generation_owner=_generation_process_owner,
+        owner=_generation_process_owner,
+    )
 
     # 只有完整成片流程需要视频配乐供应商。尽早阻止缺少 Key 的完整任务，避免
     # 先消耗 LLM、TTS 和素材服务额度；中间产物接口仍可独立使用。

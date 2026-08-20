@@ -1,5 +1,6 @@
 """Application implementation - ASGI."""
 
+import hmac
 import os
 from contextlib import asynccontextmanager
 
@@ -75,18 +76,32 @@ app = get_application()
 # Configures the CORS middleware for the FastAPI app
 cors_allowed_origins_str = os.getenv("CORS_ALLOWED_ORIGINS", "")
 origins = cors_allowed_origins_str.split(",") if cors_allowed_origins_str else ["*"]
+allow_credentials = "*" not in origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def verify_tasks_auth(request: Request, call_next):
+    path = request.url.path
+    if (path == "/tasks" or path.startswith("/tasks/")) and request.method != "OPTIONS":
+        expected = config.app.get("api_key")
+        if expected:
+            token = request.headers.get("x-api-key") or ""
+            if not hmac.compare_digest(token, expected):
+                return JSONResponse(status_code=401, content=utils.get_response(401, None, "invalid token"))
+    return await call_next(request)
+
+
 task_dir = utils.task_dir()
 app.mount(
-    "/tasks", StaticFiles(directory=task_dir, html=True, follow_symlink=True), name=""
+    "/tasks", StaticFiles(directory=task_dir, html=False, follow_symlink=False), name=""
 )
 
 public_dir = utils.public_dir()
-app.mount("/", StaticFiles(directory=public_dir, html=True), name="")
+app.mount("/", StaticFiles(directory=public_dir, html=False, follow_symlink=False), name="")

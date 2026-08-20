@@ -492,6 +492,8 @@ class TestTaskConfigSnapshot:
             "ui",
             "agentic",
             "research",
+            "whisper",
+            "proxy",
         }
         assert snapshot["app"] == dict(config.app)
         assert snapshot["app"] is not config.app

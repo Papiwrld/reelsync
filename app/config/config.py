@@ -35,7 +35,7 @@ _secret_sourced_keys: set[tuple[str, str]] = set()
 
 def _is_secret_key(key: str) -> bool:
     """Return True if *key* holds a credential that should not be written to config.toml."""
-    return key.endswith("_key") or key.endswith("_keys") or key in (
+    return key.endswith("_key") or key.endswith("_keys") or key.endswith("_password") or key in (
         "speech_key", "password", "api_key", "username",
     )
 
@@ -261,6 +261,8 @@ def snapshot_config_for_task() -> dict:
             "ui": copy.deepcopy(dict(ui)),
             "agentic": copy.deepcopy(dict(agentic)),
             "research": copy.deepcopy(dict(research)),
+            "whisper": copy.deepcopy(dict(whisper)),
+            "proxy": copy.deepcopy(dict(proxy)),
         }
 
 
@@ -821,8 +823,8 @@ def save_config():
 
 _cfg = load_config()
 app = _SynchronizedConfig(_cfg.get("app", {}), section_name="app")
-whisper = _cfg.get("whisper", {})
-proxy = _cfg.get("proxy", {})
+whisper = _SynchronizedConfig(_cfg.get("whisper", {}), section_name="whisper")
+proxy = _SynchronizedConfig(_cfg.get("proxy", {}), section_name="proxy")
 azure = _SynchronizedConfig(_cfg.get("azure", {}), section_name="azure")
 siliconflow = _SynchronizedConfig(
     _cfg.get("siliconflow", {}), section_name="siliconflow"

@@ -1,6 +1,7 @@
 import json
 import os.path
 import re
+import threading
 from timeit import default_timer as timer
 from typing import List, Tuple
 
@@ -13,11 +14,12 @@ from loguru import logger
 from app.config import config
 from app.utils import utils
 
-model_size = config.whisper.get("model_size", "large-v3")
+model_size = config.whisper.get("model_size", "small")
 device = config.whisper.get("device", "cpu")
 compute_type = config.whisper.get("compute_type", "int8")
 initial_prompt = config.whisper.get("initial_prompt", "") or None
 model = None
+_model_lock = threading.Lock()
 
 
 def create(audio_file, subtitle_file: str = ""):
@@ -27,29 +29,30 @@ def create(audio_file, subtitle_file: str = ""):
             "faster_whisper not available, skipping whisper subtitle generation"
         )
         return ""
-    if not model:
-        model_path = f"{utils.root_dir()}/models/whisper-{model_size}"
-        model_bin_file = f"{model_path}/model.bin"
-        if not os.path.isdir(model_path) or not os.path.isfile(model_bin_file):
-            model_path = model_size
+    with _model_lock:
+        if not model:
+            model_path = f"{utils.root_dir()}/models/whisper-{model_size}"
+            model_bin_file = f"{model_path}/model.bin"
+            if not os.path.isdir(model_path) or not os.path.isfile(model_bin_file):
+                model_path = model_size
 
-        logger.info(
-            f"loading model: {model_path}, device: {device}, compute_type: {compute_type}"
-        )
-        try:
-            model = WhisperModel(
-                model_size_or_path=model_path, device=device, compute_type=compute_type
+            logger.info(
+                f"loading model: {model_path}, device: {device}, compute_type: {compute_type}"
             )
-        except Exception as e:
-            logger.error(
-                f"failed to load model: {e} \n\n"
-                f"********************************************\n"
-                f"this may be caused by network issue. \n"
-                f"please download the model manually and put it in the 'models' folder. \n"
-                f"see [README.md FAQ](https://github.com/Papiwrld/reelsync) for more details.\n"
-                f"********************************************\n\n"
-            )
-            return None
+            try:
+                model = WhisperModel(
+                    model_size_or_path=model_path, device=device, compute_type=compute_type
+                )
+            except Exception as e:
+                logger.error(
+                    f"failed to load model: {e} \n\n"
+                    f"********************************************\n"
+                    f"this may be caused by network issue. \n"
+                    f"please download the model manually and put it in the 'models' folder. \n"
+                    f"see [README.md FAQ](https://github.com/Papiwrld/reelsync) for more details.\n"
+                    f"********************************************\n\n"
+                )
+                return None
 
     logger.info(f"start, output file: {subtitle_file}")
     if not subtitle_file:

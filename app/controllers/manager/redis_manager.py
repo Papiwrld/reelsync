@@ -5,7 +5,7 @@ import redis
 from loguru import logger
 from pydantic import ValidationError
 
-from app.controllers.manager.base_manager import TaskManager
+from app.controllers.manager.base_manager import TaskManager, TaskQueueFullError
 from app.models import const
 from app.models.schema import VideoParams
 from app.services import state as sm
@@ -33,6 +33,51 @@ class RedisTaskManager(TaskManager):
             host=host, port=port, db=db, password=password
         )
         super().__init__(max_concurrent_tasks, max_queued_tasks=max_queued_tasks)
+        # 分布式并发计数器，key 与队列同前缀，避免多实例间内存计数器不一致。
+        # 使用 Redis INCR/DECR 原子操作实现跨进程并发限制，TTL 防止崩溃后计数器泄漏。
+        self._concurrency_key = f"{self.queue}:concurrent"
+
+    def _try_acquire_slot(self) -> bool:
+        """尝试通过 Redis 原子递增获取并发名额，超过上限则回滚并返回 False。"""
+        try:
+            # 确保 key 存在且带过期时间，避免崩溃后永久泄漏；set nx 仅在首次创建时生效。
+            self.redis_client.set(self._concurrency_key, 0, nx=True)
+            val = self.redis_client.incr(self._concurrency_key)
+            if val == 1:
+                try:
+                    self.redis_client.expire(self._concurrency_key, 86400)
+                except Exception:
+                    pass
+            if val > self.max_concurrent_tasks:
+                self.redis_client.decr(self._concurrency_key)
+                return False
+            return True
+        except Exception as exc:
+            logger.warning(f"redis concurrency acquire failed, fallback to in-memory: {exc}")
+            # Redis 不可用时回退为进程内并发检查，至少防止单进程内过度并发。
+            if self.current_tasks < self.max_concurrent_tasks:
+                self.current_tasks += 1
+                return True
+            return False
+
+    def _release_slot(self) -> None:
+        """释放并发名额，优先操作 Redis；仅当 Redis 计数器不足时回退到本地。"""
+        try:
+            new_val = self.redis_client.decr(self._concurrency_key)
+            if new_val is not None and new_val < 0:
+                # 计数器已为 0 说明本次释放对应的是之前 fallback 到本地的槽位，
+                # 需重置 Redis 并回退本地计数器；纯 Redis 槽位释放不会进入此分支。
+                self.redis_client.set(self._concurrency_key, 0)
+                with self.lock:
+                    if self.current_tasks > 0:
+                        self.current_tasks -= 1
+            return
+        except Exception as exc:
+            logger.warning(f"redis concurrency release failed: {exc}")
+        # Redis 不可用或未使用 Redis 获取的场景，回退到本地计数器
+        with self.lock:
+            if self.current_tasks > 0:
+                self.current_tasks -= 1
 
     def create_queue(self):
         return "task_queue"
@@ -104,3 +149,58 @@ class RedisTaskManager(TaskManager):
 
     def queue_size(self):
         return self.redis_client.llen(self.queue)
+
+    def add_task(self, func, *args, **kwargs):
+        """分布式并发控制的入队入口，使用 Redis 计数器而非本地内存。"""
+        with self.lock:
+            if self._try_acquire_slot():
+                try:
+                    self.execute_task(func, *args, **kwargs)
+                except Exception:
+                    self._release_slot()
+                    raise
+            else:
+                queue_size = self.queue_size()
+                if queue_size >= self.max_queued_tasks:
+                    logger.warning(
+                        f"reject task: {func.__name__}, queue_size: {queue_size}, "
+                        f"max_queued_tasks: {self.max_queued_tasks}"
+                    )
+                    raise TaskQueueFullError(
+                        "task queue is full, please try again later"
+                    )
+                logger.info(
+                    f"enqueue task: {func.__name__}, queue_size: {queue_size}"
+                )
+                self.enqueue({"func": func, "args": args, "kwargs": kwargs})
+
+    def task_done(self):
+        """分布式并发释放，完成后尝试调度队列中的下一个任务。"""
+        self._release_slot()
+        self.check_queue()
+
+    def check_queue(self):
+        """在 Redis 并发槽位可用时调度下一个排队任务。"""
+        with self.lock:
+            if self.is_queue_empty():
+                return
+            if not self._try_acquire_slot():
+                return
+        # 出队操作在锁外执行，避免阻塞其他入队请求
+        task_info = self.dequeue()
+        if task_info is None:
+            self._release_slot()
+            return
+        func = task_info["func"]
+        args = task_info.get("args", ())
+        kwargs = task_info.get("kwargs", {})
+        try:
+            self.execute_task(func, *args, **kwargs)
+        except Exception:
+            self._release_slot()
+            # 线程启动失败需回滚并将任务放回队列，避免丢失
+            try:
+                self.enqueue(task_info)
+            except Exception as exc:
+                logger.warning(f"failed to re-enqueue task after execute failure: {exc}")
+            raise
