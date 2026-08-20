@@ -1429,6 +1429,8 @@ def download_videos(
     max_clip_duration: int = 5,
     match_script_order: bool = False,
     allow_images: bool = True,
+    grouped_search_terms: List[List[str]] | None = None,
+    scene_narrations: List[str] | None = None,
 ) -> List[str]:
     provider = "pexels"
     remote_search_videos = search_videos_pexels
@@ -1506,6 +1508,23 @@ def download_videos(
 
     # 任务级失败记录：auto 来源中某个供应商抛异常后，后续关键词不再查询它。
     failed_providers: set[str] = set()
+
+    # 场景分组精准匹配：当上游已按场景产出分组搜索词时，按场景顺序分配素材
+    if grouped_search_terms:
+        grouped_result = _download_videos_grouped(
+            task_id=task_id,
+            grouped_search_terms=grouped_search_terms,
+            scene_narrations=scene_narrations,
+            search_videos=search_videos,
+            video_aspect=video_aspect,
+            audio_duration=audio_duration,
+            max_clip_duration=max_clip_duration,
+            material_directory=material_directory,
+            failed_providers=failed_providers,
+        )
+        if grouped_result:
+            return grouped_result
+        logger.warning("grouped scene download yielded no videos, falling back to flat search")
 
     if match_script_order:
         return _download_videos_by_script_order(
@@ -1632,6 +1651,117 @@ def _download_videos_by_script_order(
         material_sources=material_sources,
     )
     logger.success(f"downloaded {len(video_paths)} ordered videos")
+    _persist_material_sources(task_id, material_sources)
+    return video_paths
+
+
+def _download_videos_grouped(
+    task_id: str,
+    grouped_search_terms: List[List[str]],
+    scene_narrations: List[str] | None,
+    search_videos,
+    video_aspect: VideoAspect,
+    audio_duration: float,
+    max_clip_duration: int,
+    material_directory: str,
+    failed_providers: set[str] | None = None,
+) -> List[str]:
+    """
+    按场景分组精准下载：每个场景的搜索词只为该场景服务，素材按场景顺序
+    连续排列，确保最终成片的画面时序与文案段落一一对应。
+
+    与轮询式顺序不同，这里每个场景的候选按场景块连续排列：
+      scene0.term0 clips, scene0.term1 clips, scene1.term0 clips...
+    最终视频按此顺序拼接时，scene0 的画面只出现在开头，sceneN 只在结尾。
+    """
+    logger.info(
+        f"downloading videos grouped by scene: {len(grouped_search_terms)} scenes, "
+        f"audio_duration={audio_duration:.1f}s"
+    )
+    # 按场景收集候选，避免跨场景 dedup 丢失场景归属
+    scene_candidates: List[List[tuple[MaterialInfo, str]]] = []
+    valid_urls: set[str] = set()
+    total_candidates = 0
+
+    for scene_idx, scene_terms in enumerate(grouped_search_terms):
+        if not scene_terms:
+            scene_candidates.append([])
+            continue
+        narration_preview = ""
+        if scene_narrations and scene_idx < len(scene_narrations):
+            narration_preview = scene_narrations[scene_idx][:80].replace("\n", " ")
+        logger.info(f"scene {scene_idx} terms={scene_terms} | narration: {narration_preview}")
+
+        scene_items: List[tuple[MaterialInfo, str]] = []
+        for search_term in scene_terms:
+            if not search_term or not search_term.strip():
+                continue
+            video_items = search_videos(
+                search_term=search_term.strip(),
+                minimum_duration=max_clip_duration,
+                video_aspect=video_aspect,
+                failed_providers=failed_providers,
+            )
+            logger.info(f"  scene {scene_idx} term '{search_term}' found {len(video_items)} videos")
+            for item in video_items:
+                if item.url in valid_urls:
+                    continue
+                scene_items.append((item, search_term))
+                valid_urls.add(item.url)
+                total_candidates += 1
+        scene_candidates.append(scene_items)
+
+    if not any(scene_candidates):
+        logger.warning("no candidates found for grouped scene terms, falling back to flat")
+        return []
+
+    # 按文案长度比例计算每场景目标时长，确保短场景不抢长场景素材
+    if scene_narrations and len(scene_narrations) == len(grouped_search_terms) and audio_duration > 0:
+        total_chars = sum(len(n) for n in scene_narrations) or 1
+        scene_targets = [
+            audio_duration * len(n) / total_chars for n in scene_narrations
+        ]
+    else:
+        per_scene = audio_duration / max(1, len(grouped_search_terms)) if audio_duration > 0 else 5.0
+        scene_targets = [per_scene] * len(grouped_search_terms)
+
+    # 每场景按目标时长截取候选，剩余候选作为溢出池按场景顺序追加
+    ordered_tasks: List[tuple[MaterialInfo, str]] = []
+    overflow: List[tuple[MaterialInfo, str]] = []
+    for scene_idx, scene_items in enumerate(scene_candidates):
+        target = scene_targets[scene_idx] if scene_idx < len(scene_targets) else 5.0
+        acc = 0.0
+        kept = 0
+        for item, term in scene_items:
+            # 估算该片段对目标时长的贡献
+            contrib = min(float(max_clip_duration), float(getattr(item, "duration", max_clip_duration) or max_clip_duration))
+            if acc >= target and kept >= 1:
+                overflow.append((item, term))
+            else:
+                ordered_tasks.append((item, term))
+                acc += contrib
+                kept += 1
+        logger.info(f"scene {scene_idx} target={target:.1f}s, selected {kept}/{len(scene_items)} clips, acc={acc:.1f}s")
+
+    # 溢出池追加到末尾，保证长视频仍能填满总时长
+    ordered_tasks.extend(overflow)
+
+    logger.info(
+        f"grouped candidates total={total_candidates}, grouped tasks={len(ordered_tasks)} (overflow {len(overflow)}), "
+        f"required duration={audio_duration:.1f}s"
+    )
+
+    video_paths: List[str] = []
+    material_sources: list[dict[str, Any]] = []
+    _download_with_concurrent_prefix(
+        tasks=ordered_tasks,
+        material_directory=material_directory,
+        max_clip_duration=max_clip_duration,
+        audio_duration=audio_duration,
+        video_paths=video_paths,
+        material_sources=material_sources,
+    )
+    logger.success(f"downloaded {len(video_paths)} grouped-scene videos")
     _persist_material_sources(task_id, material_sources)
     return video_paths
 

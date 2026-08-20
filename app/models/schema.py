@@ -319,6 +319,11 @@ class VideoParams(BaseModel):
     # 空值表示仅使用默认 storage/tasks/<task_id>/。
     output_dir: str = ""
 
+    # 按场景分组的搜索词（agentic 场景规划产出），用于脚本-画面精准匹配。
+    # None 表示使用扁平 video_terms 传统路径；有值时按场景顺序分配素材。
+    scene_search_terms: Optional[List[List[str]]] = None
+    scene_narrations: Optional[List[str]] = None
+
     # ---- 图文叠加层（Overlay）----
     # 素材时长自动模式时，video_clip_duration=0 由服务层推导，这里记录推导后的值。
     # overlay_enabled 总开关；叠加层文本卡与图片卡均仅在开启时合成。

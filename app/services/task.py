@@ -400,24 +400,95 @@ def _agentic_scene_search_terms(task_id: str) -> list[str]:
     than global topic keywords. Returns an empty list when no agentic state or
     scene plan is available, so callers fall back to LLM term generation.
     """
+    return [term for group in _agentic_scene_groups(task_id) for term in group]
+
+
+def _agentic_scene_groups(task_id: str) -> list[list[str]]:
+    """Return per-scene grouped search terms, preserving scene boundaries.
+
+    Each inner list corresponds to one scene's visual plan in narrative order.
+    Empty when no agentic state is available.
+    """
     try:
         state = task_artifacts.load_agentic_state(task_id)
         scenes = state.get("scenes") or state.get("scene_plan", {}).get("scenes") or []
         if not scenes:
             return []
-        terms: list[str] = []
+        groups: list[list[str]] = []
         for scene in scenes:
             if not isinstance(scene, dict):
                 continue
             scene_terms = scene.get("search_terms") or []
             if isinstance(scene_terms, str):
                 scene_terms = [scene_terms]
-            for term in scene_terms:
-                if isinstance(term, str) and term.strip():
-                    terms.append(term.strip())
-        return terms
+            cleaned = [t.strip() for t in scene_terms if isinstance(t, str) and t.strip()]
+            if cleaned:
+                groups.append(cleaned)
+        return groups
     except Exception:  # noqa: BLE001 - planning data must never block generation
         return []
+
+
+def _agentic_scene_narrations(task_id: str) -> list[str]:
+    """Return per-scene narration chunks in order, for duration allocation."""
+    try:
+        state = task_artifacts.load_agentic_state(task_id)
+        scenes = state.get("scenes") or state.get("scene_plan", {}).get("scenes") or []
+        if not scenes:
+            return []
+        narrations: list[str] = []
+        for scene in scenes:
+            if not isinstance(scene, dict):
+                continue
+            narration = str(scene.get("narration") or scene.get("chunk") or "").strip()
+            if narration:
+                narrations.append(narration)
+        return narrations
+    except Exception:
+        return []
+
+
+def _deterministic_scene_groups_from_script(video_script: str, max_scenes: int = 8) -> tuple[list[list[str]], list[str]]:
+    """按标点切分脚本为场景，逐场景提取确定性检索词，用于无 Agentic 时的按段匹配。"""
+    if not video_script or not video_script.strip():
+        return [], []
+    # 按句号/感叹/问号切分，保留语义完整性
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?。！？])\s+", video_script.strip()) if s.strip()]
+    if not sentences:
+        return [], []
+    # 目标场景数：按句子数推导，2-4 句/场景，上限 8
+    scene_count = max(1, min(max_scenes, (len(sentences) + 2) // 3))
+    # 均匀分配句子到场景
+    groups: list[list[str]] = []
+    narrations: list[str] = []
+    chunk_size = (len(sentences) + scene_count - 1) // scene_count
+    for idx in range(scene_count):
+        chunk = sentences[idx * chunk_size : (idx + 1) * chunk_size]
+        if not chunk:
+            continue
+        narration = " ".join(chunk)
+        narrations.append(narration)
+        # 复用 visual_director 的确定性词提取（若可用），否则回落到简单名词提取
+        try:
+            from app.services.visual_director import _significant_search_terms
+
+            terms = _significant_search_terms(narration, limit=3)
+        except Exception:
+            # 极简回落：取长度>3 的英文词或 2 字以上中文片段的前 3 个
+            words = re.findall(r"[A-Za-z][A-Za-z0-9']{2,}", narration.lower())
+            seen: set[str] = set()
+            terms = []
+            for w in words:
+                if w not in seen and len(w) >= 3:
+                    seen.add(w)
+                    terms.append(w)
+                if len(terms) >= 3:
+                    break
+            if not terms:
+                terms = [narration[:20].strip()]
+        if terms:
+            groups.append(terms)
+    return groups, narrations
 
 
 def generate_terms(task_id, params, video_script):
@@ -427,32 +498,113 @@ def generate_terms(task_id, params, video_script):
         # 先尝试使用 Agentic 场景规划生成的逐场景搜索词：视觉导演为每个
         # 场景产出“具体可视对象/地点/动作”的搜索词，比全局主题词更能命中
         # 与文案真正匹配的画面。只有场景词缺失或非空时才会回退到 LLM 词。
-        scene_terms = _agentic_scene_search_terms(task_id)
-        if scene_terms:
+        # 优先保留按场景分组的结构，用于后续按场景精准分配素材时长。
+        # 单次加载 agentic state，避免重复 IO
+        try:
+            _state = task_artifacts.load_agentic_state(task_id)
+            _scenes = _state.get("scenes") or _state.get("scene_plan", {}).get("scenes") or []
+        except Exception:
+            _scenes = []
+        scene_groups: list[list[str]] = []
+        scene_narrations: list[str] = []
+        for _scene in _scenes:
+            if not isinstance(_scene, dict):
+                continue
+            _terms = _scene.get("search_terms") or []
+            if isinstance(_terms, str):
+                _terms = [_terms]
+            cleaned = [t.strip() for t in _terms if isinstance(t, str) and t.strip()]
+            if cleaned:
+                scene_groups.append(cleaned)
+            narration = str(_scene.get("narration") or _scene.get("chunk") or "").strip()
+            if narration:
+                scene_narrations.append(narration)
+        if scene_groups:
+            scene_terms = [t for g in scene_groups for t in g]
             video_terms = scene_terms
+            try:
+                params.scene_search_terms = scene_groups  # type: ignore[attr-defined]
+                params.scene_narrations = scene_narrations  # type: ignore[attr-defined]
+            except Exception:
+                pass
             logger.info(
-                f"using {len(video_terms)} scene-plan search terms from agentic state"
+                f"using {len(video_terms)} scene-plan search terms from agentic state "
+                f"({len(scene_groups)} scenes, grouped)"
             )
         else:
-            # 开启素材按文案顺序匹配后，关键词本身也必须按脚本叙事顺序生成；
-            # 否则后续即使顺序下载和顺序拼接，也只能复用一组全局主题词，
-            # 无法改善“后面内容的画面提前出现”的问题。
-            # 长视频自动扩充关键词，避免 5 词覆盖 60s+ 导致素材重复
-            try:
-                target_secs = int(getattr(params, "video_duration_seconds", 0) or 0)
-                if not target_secs:
-                    # 回落：用脚本长度估算目标时长（约 2.5 字/秒中文，2.2 词/秒英文）
-                    target_secs = max(30, min(180, len(video_script) // 3))
-            except Exception:
-                target_secs = 60
-            base_amount = 8 if params.match_materials_to_script else 5
-            adaptive_amount = max(base_amount, min(15, (target_secs + 5) // 6))
-            video_terms = llm.generate_terms(
-                video_subject=params.video_subject,
-                video_script=video_script,
-                amount=adaptive_amount,
-                match_script_order=params.match_materials_to_script,
-            )
+            # 非 Agentic 分支：若开启按文案顺序，优先构建确定性场景分组
+            # （无需 LLM，按标点切分脚本为 2-8 场景，逐场景提词），确保画面
+            # 时序与文案段落一一对应；此时素材下载将按场景分组连续下载
+            # （scene0 素材全部在前，scene1 在后），而非全局轮询打散。
+            if params.match_materials_to_script:
+                det_groups, det_narrations = _deterministic_scene_groups_from_script(video_script)
+                if det_groups and len(det_groups) >= 2:
+                    flat = [t for g in det_groups for t in g]
+                    try:
+                        params.scene_search_terms = det_groups  # type: ignore[attr-defined]
+                        params.scene_narrations = det_narrations  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    logger.info(
+                        f"using {len(flat)} deterministic scene terms from {len(det_groups)} scenes "
+                        f"(match_script_order, no agentic state)"
+                    )
+                    # 尝试用 LLM 获取更语义化的按序词作为 flat 补充，但保留分组结构
+                    try:
+                        target_secs = int(getattr(params, "video_duration_seconds", 0) or 0)
+                        if not target_secs:
+                            target_secs = max(30, min(180, len(video_script) // 3))
+                    except Exception:
+                        target_secs = 60
+                    base_amount = 8
+                    adaptive_amount = max(base_amount, min(15, (target_secs + 5) // 6))
+                    try:
+                        llm_terms = llm.generate_terms(
+                            video_subject=params.video_subject,
+                            video_script=video_script,
+                            amount=adaptive_amount,
+                            match_script_order=True,
+                        )
+                        if llm_terms:
+                            video_terms = llm_terms
+                            logger.info(f"LLM ordered terms补充: {len(llm_terms)} terms, keeping deterministic grouping")
+                        else:
+                            video_terms = flat
+                    except Exception as exc:
+                        logger.debug(f"LLM ordered terms fallback to deterministic: {exc}")
+                        video_terms = flat
+                else:
+                    # 回落到原有全局逻辑
+                    try:
+                        target_secs = int(getattr(params, "video_duration_seconds", 0) or 0)
+                        if not target_secs:
+                            target_secs = max(30, min(180, len(video_script) // 3))
+                    except Exception:
+                        target_secs = 60
+                    base_amount = 8
+                    adaptive_amount = max(base_amount, min(15, (target_secs + 5) // 6))
+                    video_terms = llm.generate_terms(
+                        video_subject=params.video_subject,
+                        video_script=video_script,
+                        amount=adaptive_amount,
+                        match_script_order=True,
+                    )
+            else:
+                # 非顺序模式：原有全局逻辑
+                try:
+                    target_secs = int(getattr(params, "video_duration_seconds", 0) or 0)
+                    if not target_secs:
+                        target_secs = max(30, min(180, len(video_script) // 3))
+                except Exception:
+                    target_secs = 60
+                base_amount = 5
+                adaptive_amount = max(base_amount, min(15, (target_secs + 5) // 6))
+                video_terms = llm.generate_terms(
+                    video_subject=params.video_subject,
+                    video_script=video_script,
+                    amount=adaptive_amount,
+                    match_script_order=False,
+                )
     else:
         if isinstance(video_terms, str):
             video_terms = [term.strip() for term in re.split(r"[,，]", video_terms)]
@@ -788,8 +940,14 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
         return [material_info.url for material_info in materials]
     else:
         logger.info(f"\n\n## downloading videos from {params.video_source}")
-        # 顺序匹配模式只在用户显式开启时生效。这里强制素材下载按关键词顺序
-        # 轮询，避免某个早期关键词下载太多素材，把后续脚本主题挤出最终时间线。
+        # 优先按场景分组精准匹配：每个场景的画面只为该场景的文案段服务，
+        # 素材按场景顺序连续排列，成片时序与文案段落一一对应。无分组时
+        # 回落到原有全局/轮询逻辑。
+        grouped = getattr(params, "scene_search_terms", None)
+        narrations = getattr(params, "scene_narrations", None)
+        use_grouped = isinstance(grouped, list) and grouped and any(g for g in grouped if g)
+        if use_grouped:
+            logger.info(f"using grouped scene terms: {len(grouped)} scenes")
         downloaded_videos = material.download_videos(
             task_id=task_id,
             search_terms=video_terms,
@@ -797,16 +955,18 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
             video_aspect=params.video_aspect,
             video_concat_mode=(
                 VideoConcatMode.sequential
-                if params.match_materials_to_script
+                if (params.match_materials_to_script or use_grouped)
                 else params.video_concat_mode
             ),
             audio_duration=audio_duration * params.video_count,
             max_clip_duration=params.video_clip_duration,
-            match_script_order=params.match_materials_to_script,
+            match_script_order=params.match_materials_to_script or use_grouped,
             allow_images=(
                 getattr(params, "material_media_type", "images_videos")
                 != "videos_only"
             ),
+            grouped_search_terms=grouped if use_grouped else None,
+            scene_narrations=narrations if use_grouped else None,
         )
         if not downloaded_videos:
             _mark_task_failed(
