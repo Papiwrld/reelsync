@@ -118,6 +118,9 @@ enable_web_scraping = true
 # Web 抓取分辨率上限：1080（默认，低端设备）或 2160（4K，需更高内存与带宽）
 web_scrape_max_height = 1080
 web_scrape_max_filesize = "500M"
+# 水印处理：默认不移除（移除他人水印可能违反平台 ToS/版权）。仅当你拥有
+# 素材版权时可设为 true，此时自动对下载的网页视频应用 ffmpeg delogo。
+enable_watermark_removal = false
 gemini_base_url = ""
 custom_api_video_url = "https://generativelanguage.googleapis.com/v1beta/interactions"
 custom_api_image_url = "https://generativelanguage.googleapis.com/v1beta/interactions"

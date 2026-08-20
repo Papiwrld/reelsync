@@ -1,6 +1,7 @@
 import glob
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -149,6 +150,95 @@ def _matches_video_aspect(
     return normalized_width == normalized_height
 
 
+def _rewrite_query_for_web_search(search_term: str) -> str:
+    """Use LLM to rewrite a scene search term into a high-recall YouTube/TikTok query.
+
+    Stock search terms are concrete phrases like 'growing bar chart' — good for
+    Pexels but too narrow for YouTube. The rewrite expands to natural language
+    that matches video titles, e.g. 'growing bar chart' → 'business chart growing animation'.
+    Falls back to original term on any LLM failure (never blocks scraping).
+    """
+    try:
+        from app.config import config
+        from app.services import llm as _llm
+
+        # Only rewrite when LLM is configured; otherwise keep original
+        if not config.app.get("llm_provider") and not config.app.get("openai_api_key") and not config.app.get("gemini_api_key"):
+            return search_term
+        prompt = (
+            "Rewrite this stock-footage search phrase into a short YouTube/TikTok search query "
+            "(3-6 words) that will find real videos matching the scene. Keep it concrete and visual, "
+            "no abstract concepts. Return ONLY the rewritten query, nothing else.\n"
+            f"Phrase: \"{search_term}\""
+        )
+        rewritten = _llm._generate_response(prompt=prompt)
+        if isinstance(rewritten, str) and rewritten.startswith("Error:"):
+            return search_term
+        cleaned = re.sub(r'^["\']|["\']$', "", (rewritten or "").strip().splitlines()[0].strip())
+        if 3 <= len(cleaned) <= 80 and len(cleaned.split()) <= 8:
+            logger.info(f"web search query rewritten: {search_term!r} -> {cleaned!r}")
+            return cleaned
+    except Exception as exc:
+        logger.debug(f"web query rewrite fallback: {exc}")
+    return search_term
+
+
+def _rank_web_results_by_relevance(
+    results: List[MaterialInfo], search_term: str, top_k: int = 5
+) -> List[MaterialInfo]:
+    """LLM re-rank web candidates by title/description relevance to the scene.
+
+    Keeps top_k most relevant. Falls back to original order on LLM failure.
+    """
+    if len(results) <= top_k:
+        return results
+    try:
+        from app.config import config
+        from app.services import llm as _llm
+        import json as _json
+
+        if not config.app.get("llm_provider") and not config.app.get("openai_api_key") and not config.app.get("gemini_api_key"):
+            return results[:top_k]
+
+        # Build compact candidate list for LLM
+        candidates = []
+        for idx, r in enumerate(results[:10]):
+            info = r.source_info or {}
+            candidates.append(
+                {"idx": idx, "title": info.get("title", "")[:80], "desc": info.get("description", "")[:120]}
+            )
+        prompt = (
+            "Rank these YouTube candidates by how well they visually match the scene query. "
+            "Return ONLY a JSON array of indices in ranked order, most relevant first.\n"
+            f"Query: \"{search_term}\"\n"
+            f"Candidates: {_json.dumps(candidates, ensure_ascii=False)}\n"
+            "Example: [2,0,1]"
+        )
+        raw = _llm._generate_response(prompt=prompt)
+        if isinstance(raw, str) and raw.startswith("Error:"):
+            return results[:top_k]
+        # Extract JSON array
+        m = re.search(r"\[[\d,\s]+\]", raw or "")
+        if not m:
+            return results[:top_k]
+        order = json.loads(m.group(0))
+        ranked = []
+        seen = set()
+        for idx in order:
+            if isinstance(idx, int) and 0 <= idx < len(results) and idx not in seen:
+                ranked.append(results[idx])
+                seen.add(idx)
+        # Append any missing in original order
+        for idx, r in enumerate(results):
+            if idx not in seen:
+                ranked.append(r)
+        logger.info(f"web results re-ranked for {search_term!r}: {[r.source_info.get('title','')[:30] for r in ranked[:top_k]]}")
+        return ranked[:top_k]
+    except Exception as exc:
+        logger.debug(f"web rank fallback: {exc}")
+        return results[:top_k]
+
+
 def search_videos_web_scrape(
     search_term: str,
     minimum_duration: int,
@@ -156,14 +246,20 @@ def search_videos_web_scrape(
 ) -> List[MaterialInfo]:
     """
     Search for web videos using yt-dlp. Returns the top 5 results matching the search term.
+
+    Highly intelligent mode: rewrites the query via LLM for YouTube/TikTok recall and
+    re-ranks candidates by title/description relevance. Falls back gracefully when
+    LLM is not configured.
     """
-    logger.info(f"Searching web videos for {search_term!r} via yt-dlp")
+    # Intelligent query rewrite for better YouTube/TikTok recall
+    effective_term = _rewrite_query_for_web_search(search_term)
+    logger.info(f"Searching web videos for {search_term!r} (effective: {effective_term!r}) via yt-dlp")
     results = []
 
     # ytsearch5: keyword limits search to 5 results
     command = [
         "yt-dlp",
-        f"ytsearch5:{search_term}",
+        f"ytsearch5:{effective_term}",
         "--dump-json",
         "--default-search",
         "ytsearch",
@@ -250,6 +346,10 @@ def search_videos_web_scrape(
 
     except Exception as e:
         logger.error(f"Error executing yt-dlp: {e}")
+
+    # Highly intelligent re-ranking: keep top-5 most scene-relevant
+    if results:
+        results = _rank_web_results_by_relevance(results, search_term, top_k=5)
 
     return results
 
@@ -346,9 +446,63 @@ def fetch_page_metadata(url: str, proxy: str = "") -> dict:
         return {}
 
 
+def _maybe_remove_watermark(input_path: str) -> bool:
+    """Optionally remove platform watermark via ffmpeg delogo (only when explicitly enabled).
+
+    Default: disabled. When `app.enable_watermark_removal` is true, applies a
+    generic delogo at bottom-right (common TikTok/YouTube Shorts watermark area).
+    This is intended ONLY for user-owned content where you have the rights.
+    Removing watermarks from copyrighted stock violates ToS — disabled by default.
+    Returns True if removal was attempted.
+    """
+    try:
+        from app.config import config
+
+        if not config.app.get("enable_watermark_removal"):
+            return False
+    except Exception:
+        return False
+
+    # Generic bottom-right delogo (10-20% of frame) — not pixel-perfect but hides
+    # most platform watermarks without cropping. Uses ffmpeg delogo filter.
+    try:
+        import shutil
+
+        tmp = input_path + ".nowm.mp4"
+        # delogo x/y/w/h as fractions via expressions (works for any resolution)
+        # x=W-w*0.22:y=H-h*0.14:w=w*0.20:h=h*0.12:show=0
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            input_path,
+            "-vf",
+            "delogo=x=W-w*0.22:y=H-h*0.14:w=w*0.20:h=h*0.12:show=0",
+            "-c:a",
+            "copy",
+            tmp,
+        ]
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+        if proc.returncode == 0 and os.path.isfile(tmp) and os.path.getsize(tmp) > 0:
+            shutil.move(tmp, input_path)
+            logger.info(f"watermark delogo applied: {input_path}")
+            return True
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.warning(f"watermark removal failed: {exc}")
+    return False
+
+
 def download_web_video(url: str, output_path: str) -> bool:
     """
     Download a single video using yt-dlp to the specified output path.
+
+    Supports any yt-dlp extractor (YouTube, TikTok, Instagram, Twitter/X, etc. — 1800+ sites).
+    Pass a direct video URL (e.g. https://www.tiktok.com/... or https://youtube.com/watch?v=...)
+    to fetch that exact video; search mode uses YouTube via ytsearch.
 
     只有目标文件存在且非空时才返回 True。失败、超时或没有产出时清理残留的
     ``.part``/``.ytdl`` 临时文件，避免磁盘占用和后续重试被残留文件干扰。
@@ -411,6 +565,8 @@ def download_web_video(url: str, output_path: str) -> bool:
             output_ok = False
         if output_ok:
             success = True
+            # Optional watermark removal for user-owned content (disabled by default)
+            _maybe_remove_watermark(output_path)
             return True
         logger.error(f"yt-dlp finished without producing output file: {output_path}")
         return False
