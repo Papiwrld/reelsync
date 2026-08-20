@@ -905,11 +905,70 @@ def _render_task_table(filtered_tasks, key_prefix):
                             st.error(tr("Task Delete Failed"))
 
 
+def _delete_all_tasks(tasks):
+    """批量删除所有非运行中的任务，返回 (成功数, 失败数, 跳过数)。
+
+    运行中/忙碌的任务与单个删除的行为一致：跳过不删，避免破坏正在进行的生成。
+    """
+    deleted = failed = skipped = 0
+    for task in tasks:
+        task_id = task.get("task_id", "")
+        if not task_id:
+            continue
+        if _task_state_filter_key(task) == "processing":
+            skipped += 1
+            continue
+        if _delete_task(task_id, task["task_path"], task.get("state")):
+            deleted += 1
+        else:
+            failed += 1
+    return deleted, failed, skipped
+
+
+def _render_delete_all_row(tasks):
+    """任务列表顶部的“全部删除”按钮：两段式确认，避免误删。"""
+    deletable_count = sum(
+        1 for task in tasks if _task_state_filter_key(task) != "processing"
+    )
+    if not deletable_count:
+        return
+
+    confirm_key = "task_manager_delete_all_arm"
+    armed = bool(st.session_state.get(confirm_key))
+    label = (
+        tr("Confirm Delete All Tasks").format(count=deletable_count)
+        if armed
+        else tr("Delete All Tasks")
+    )
+    if st.button(
+        label,
+        icon=":material/delete_sweep:",
+        type="primary" if armed else "secondary",
+        key="task_manager_delete_all_button",
+        use_container_width=True,
+    ):
+        if not armed:
+            st.session_state[confirm_key] = True
+            st.rerun(scope="fragment")
+        else:
+            st.session_state[confirm_key] = False
+            deleted, failed, skipped = _delete_all_tasks(tasks)
+            if deleted:
+                st.toast(tr("Tasks Deleted Summary").format(count=deleted), icon="🗑️")
+            if skipped:
+                st.toast(tr("Tasks Skipped Processing").format(count=skipped))
+            if failed:
+                st.error(tr("Task Delete Failed"))
+            st.rerun(scope="fragment")
+
+
 def _render_task_manager_panel(tasks=None):
     tasks = tasks if tasks is not None else _collect_task_summaries()
     if not tasks:
         st.info(tr("No Tasks Yet"))
         return
+
+    _render_delete_all_row(tasks)
 
     # Streamlit 1.59 支持有状态 Tabs 的惰性渲染。切换时只重新构建当前列表，
     # 避免定时 Fragment 每两秒重复创建四套任务行和操作按钮。

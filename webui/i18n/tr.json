@@ -540,7 +540,11 @@
     "LLM Quota Exceeded": "Sağlayıcı kotası veya faturalama sorunu. LLM sağlayıcınızdaki hesabınızı kontrol edin.",
     "LLM Timeout": "LLM sağlayıcısı yanıt vermek için çok uzun sürdü. Tekrar deneyin.",
     "LLM Unreachable": "LLM sağlayıcısına ulaşılamadı. Ağınızı veya proxy ayarlarınızı kontrol edin.",
-    "LLM Request Failed": "LLM isteği başarısız oldu. Ayarlar'dan sağlayıcı yapılandırmasını kontrol edin."
+    "LLM Request Failed": "LLM isteği başarısız oldu. Ayarlar'dan sağlayıcı yapılandırmasını kontrol edin.",
+    "Delete All Tasks": "Tüm görevleri sil",
+    "Confirm Delete All Tasks": "Onayla: {count} görev silinsin mi?",
+    "Tasks Deleted Summary": "{count} görev silindi",
+    "Tasks Skipped Processing": "{count} çalışan görev korundu"
   },
   "Agent Stage Intelligence": "Niş ve kitle analiz ediliyor",
   "Agent Stage Research": "Konu araştırılıyor",

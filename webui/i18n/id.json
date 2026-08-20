@@ -540,7 +540,11 @@
     "LLM Quota Exceeded": "Masalah kuota atau penagihan penyedia. Periksa akunmu di penyedia LLM.",
     "LLM Timeout": "Penyedia LLM membutuhkan waktu terlalu lama. Coba lagi.",
     "LLM Unreachable": "Tidak dapat menghubungi penyedia LLM. Periksa jaringan atau pengaturan proxy.",
-    "LLM Request Failed": "Permintaan LLM gagal. Periksa konfigurasi penyedia di Pengaturan."
+    "LLM Request Failed": "Permintaan LLM gagal. Periksa konfigurasi penyedia di Pengaturan.",
+    "Delete All Tasks": "Hapus Semua Tugas",
+    "Confirm Delete All Tasks": "Konfirmasi: hapus {count} tugas?",
+    "Tasks Deleted Summary": "{count} tugas dihapus",
+    "Tasks Skipped Processing": "{count} tugas yang berjalan tetap disimpan"
   },
   "Agent Stage Intelligence": "Menganalisis niche & audiens",
   "Agent Stage Research": "Meneliti topik",

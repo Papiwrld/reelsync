@@ -539,7 +539,11 @@
     "LLM Quota Exceeded": "Kontingent- oder Abrechnungsproblem des Anbieters. Prüfe dein Konto beim LLM-Anbieter.",
     "LLM Timeout": "Der LLM-Anbieter hat zu lange gebraucht. Versuche es erneut.",
     "LLM Unreachable": "LLM-Anbieter nicht erreichbar. Prüfe Netzwerk- oder Proxy-Einstellungen.",
-    "LLM Request Failed": "Die LLM-Anfrage ist fehlgeschlagen. Prüfe die Anbieterkonfiguration in den Einstellungen."
+    "LLM Request Failed": "Die LLM-Anfrage ist fehlgeschlagen. Prüfe die Anbieterkonfiguration in den Einstellungen.",
+    "Delete All Tasks": "Alle Aufgaben löschen",
+    "Confirm Delete All Tasks": "Bestätigen: {count} Aufgaben löschen?",
+    "Tasks Deleted Summary": "{count} Aufgaben gelöscht",
+    "Tasks Skipped Processing": "{count} laufende Aufgaben wurden beibehalten"
   },
   "Agent Stage Intelligence": "Nische & Publikum analysieren",
   "Agent Stage Research": "Thema recherchieren",

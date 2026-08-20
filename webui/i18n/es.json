@@ -539,7 +539,11 @@
     "LLM Quota Exceeded": "Problema de cuota o facturación del proveedor. Revisa tu cuenta con el proveedor del LLM.",
     "LLM Timeout": "El proveedor del LLM tardó demasiado en responder. Inténtalo de nuevo.",
     "LLM Unreachable": "No se pudo conectar con el proveedor del LLM. Revisa tu red o proxy.",
-    "LLM Request Failed": "La solicitud al LLM falló. Revisa la configuración del proveedor en Ajustes."
+    "LLM Request Failed": "La solicitud al LLM falló. Revisa la configuración del proveedor en Ajustes.",
+    "Delete All Tasks": "Eliminar todas las tareas",
+    "Confirm Delete All Tasks": "Confirmar: ¿eliminar {count} tareas?",
+    "Tasks Deleted Summary": "{count} tareas eliminadas",
+    "Tasks Skipped Processing": "Se mantuvieron {count} tareas en ejecución"
   },
   "Agent Stage Intelligence": "Analizando nicho y audiencia",
   "Agent Stage Research": "Investigando el tema",

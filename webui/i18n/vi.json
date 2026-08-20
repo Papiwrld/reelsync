@@ -539,7 +539,11 @@
     "LLM Quota Exceeded": "Vấn đề hạn mức hoặc thanh toán của nhà cung cấp. Kiểm tra tài khoản tại nhà cung cấp LLM.",
     "LLM Timeout": "Nhà cung cấp LLM phản hồi quá lâu. Vui lòng thử lại.",
     "LLM Unreachable": "Không thể kết nối tới nhà cung cấp LLM. Kiểm tra mạng hoặc cấu hình proxy.",
-    "LLM Request Failed": "Yêu cầu LLM thất bại. Kiểm tra cấu hình nhà cung cấp trong Cài đặt."
+    "LLM Request Failed": "Yêu cầu LLM thất bại. Kiểm tra cấu hình nhà cung cấp trong Cài đặt.",
+    "Delete All Tasks": "Xóa tất cả tác vụ",
+    "Confirm Delete All Tasks": "Xác nhận: xóa {count} tác vụ?",
+    "Tasks Deleted Summary": "Đã xóa {count} tác vụ",
+    "Tasks Skipped Processing": "Đã giữ lại {count} tác vụ đang chạy"
   },
   "Agent Stage Intelligence": "Đang phân tích niche & khán giả",
   "Agent Stage Research": "Đang nghiên cứu chủ đề",
