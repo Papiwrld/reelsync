@@ -53,8 +53,8 @@
     position: sticky; top: 0;
   }
   .brand { display: flex; align-items: baseline; gap: 8px; }
-  .brand-name { font-size: 2.75rem; font-weight: 800; letter-spacing: -1.5px; line-height: 1; }
-  .brand-version { font-size: 1rem; opacity: 0.72; font-weight: 400; }
+  .brand-name { font-size: 2.75rem; font-weight: 700; letter-spacing: 0; line-height: 1.15; }
+  .brand-version { font-size: 1rem; opacity: 0.72; font-weight: 600; }
   .topbar-spacer { flex: 1; }
   .topbar-actions { display: flex; align-items: center; gap: 6px; }
   .tb-btn {
@@ -66,6 +66,14 @@
   }
   .tb-btn:hover { color: var(--text); background: rgba(255,255,255,0.05); border-color: var(--border); }
   .tb-btn svg { width: 18px; height: 18px; opacity: 0.7; }
+  /* Task Manager 入口按钮：与 webui/styles.css 的胶囊样式一致 */
+  .tb-btn.tm-pill {
+    border-radius: 20px;
+    background: linear-gradient(135deg, rgba(255,90,90,0.1), rgba(255,120,120,0.05));
+    border: 1px solid rgba(255,90,90,0.3);
+    color: #ff5a5a; font-weight: 600;
+  }
+  .tb-btn.tm-pill.flash { background: rgba(255,90,90,0.2); border-color: rgba(255,90,90,0.6); box-shadow: 0 4px 12px rgba(224,49,49,0.25); }
   .lang-sel {
     padding: 6px 10px; border-radius: 8px; font-size: 13px;
     background: var(--bg2); color: var(--text); border: 1px solid var(--border);
@@ -80,7 +88,8 @@
     display: grid;
     grid-template-columns: 1.1fr 2.2fr;
     gap: 0;
-    min-height: calc(100vh - 56px);
+    /* 固定为视口高度：左栏内部滚动，右栏底部生成区始终可见（与真实 UI 一致） */
+    height: calc(100vh - 56px);
   }
 
   /* ---------- Left panel ---------- */
@@ -160,6 +169,13 @@
     transition: all .15s; margin-bottom: 14px;
   }
   .btn-gen-script:hover { border-color: var(--accent); background: rgba(255,75,75,0.06); }
+  /* REC 自动演示：按钮被"按下"时的高亮环 */
+  .btn-gen-script.flash {
+    border-color: var(--accent) !important;
+    background: rgba(255,75,75,0.14) !important;
+    box-shadow: 0 0 0 3px rgba(255,75,75,0.25);
+  }
+  .generate-btn.flash { filter: brightness(1.18); transform: scale(0.98); box-shadow: 0 0 0 4px rgba(255,75,75,0.35); }
   .ci-desc {
     font-size: 13px; color: var(--dim); margin-top: 4px;
     line-height: 1.45;
@@ -169,29 +185,33 @@
   .right-panel {
     display: flex; flex-direction: column;
     overflow: hidden;
+    min-height: 0;
   }
 
-  /* Tabs */
+  /* Tabs —— 与 webui/styles.css 的 stTabs 容器一致：圆角容器 + 内边距 */
   .tab-bar {
-    display: flex; gap: 0; padding: 0 16px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg);
+    display: flex; gap: 4px; padding: 10px 15px;
+    margin: 16px 16px 0 16px;
+    background: rgba(25,27,31,0.5);
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.1);
     flex-shrink: 0;
   }
   .tab-btn {
-    padding: 14px 20px;
+    padding: 10px 15px;
     font-size: 1.1rem; font-weight: 600;
     color: var(--muted); border-bottom: 3px solid transparent;
-    transition: all .15s; cursor: pointer;
+    border-radius: 8px;
+    transition: all .2s; cursor: pointer;
     background: none; border-top: none; border-left: none; border-right: none;
   }
-  .tab-btn:hover { color: var(--text); }
+  .tab-btn:hover { color: var(--text); background: rgba(255,255,255,0.05); }
   .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 
   /* Tab content */
   .tab-content {
-    flex: 1; overflow-y: auto; padding: 16px;
-    max-height: calc(100vh - 56px - 49px);
+    flex: 1 1 0; min-height: 0;
+    overflow-y: auto; padding: 16px;
   }
   .tab-pane { display: none; }
   .tab-pane.active { display: block; }
@@ -273,16 +293,16 @@
     flex-shrink: 0;
   }
   .generate-btn {
-    width: 100%; padding: 16px 24px; border-radius: 16px;
+    width: 100%; padding: 16px 24px; border-radius: 12px;
     background: var(--accent-grad); color: #fff;
     font-size: 1.1rem; font-weight: 700;
     box-shadow: 0 6px 20px rgba(224,49,49,0.35);
-    transition: all .2s; letter-spacing: -0.2px;
+    transition: transform .2s ease, box-shadow .2s ease; letter-spacing: -0.2px;
     border: none; cursor: pointer;
   }
   .generate-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 10px 28px rgba(224,49,49,0.45);
+    transform: scale(1.02);
+    box-shadow: 0 4px 15px rgba(255,75,75,0.3);
   }
   .generate-btn:disabled {
     opacity: 0.45; filter: grayscale(0.9);
@@ -319,10 +339,11 @@
   }
   .video-player.show { display: block; }
   .video-player .vp-inner {
-    position: relative; width: 100%; aspect-ratio: 9/16;
-    max-height: 400px; margin: 0 auto;
+    position: relative; height: 280px; aspect-ratio: 9/16;
+    margin: 0 auto;
     background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
     display: grid; place-items: center;
+    overflow: hidden;
   }
   .video-player .vp-inner video {
     width: 100%; height: 100%; object-fit: contain;
@@ -332,6 +353,39 @@
   }
   .vp-placeholder .icon { font-size: 48px; margin-bottom: 8px; }
   .vp-placeholder .label { font-size: 14px; }
+  /* 成片预览：模拟 ReelSync 输出画面（素材 + 高亮字幕） */
+  .vp-film {
+    display: none; position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse at 70% 20%, rgba(255,120,60,0.35), transparent 55%),
+      radial-gradient(ellipse at 25% 75%, rgba(80,60,180,0.4), transparent 60%),
+      linear-gradient(160deg, #2b1d3a 0%, #1a1426 45%, #0d0a14 100%);
+  }
+  .vp-film.show { display: block; animation: filmIn .5s ease-out; }
+  @keyframes filmIn { from { opacity: 0; transform: scale(1.04); } to { opacity: 1; transform: scale(1); } }
+  .vp-film .storm {
+    position: absolute; top: 12%; left: 50%; transform: translateX(-50%);
+    width: 46%; aspect-ratio: 1; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,214,90,0.5) 0%, rgba(255,150,50,0.18) 45%, transparent 70%);
+    filter: blur(6px);
+    animation: stormPulse 2.4s ease-in-out infinite;
+  }
+  @keyframes stormPulse { 0%,100% { opacity: .7; transform: translateX(-50%) scale(1); } 50% { opacity: 1; transform: translateX(-50%) scale(1.12); } }
+  .vp-film .caption {
+    position: absolute; left: 8%; right: 8%; bottom: 14%;
+    text-align: center;
+    font-size: 30px; font-weight: 800; line-height: 1.15;
+    color: #fff; text-transform: uppercase;
+    text-shadow: 0 3px 0 #000, 0 0 18px rgba(0,0,0,0.65);
+    letter-spacing: -0.5px;
+  }
+  .vp-film .caption .hl { color: var(--amber); }
+  .vp-film .badge {
+    position: absolute; top: 10px; left: 10px;
+    padding: 3px 10px; border-radius: 12px;
+    background: rgba(0,0,0,0.55); color: #fff;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.4px;
+  }
   .vp-controls {
     display: flex; align-items: center; gap: 10px;
     padding: 10px 14px; background: var(--panel);
@@ -406,9 +460,9 @@
     .brand-name { font-size: 1.875rem; }
   }
 
-  /* Demo mode badge */
+  /* Demo mode badge —— 左下角，避开顶部操作区与右下角 toast */
   .demo-badge {
-    display: none; position: fixed; top: 14px; right: 14px;
+    display: none; position: fixed; bottom: 14px; left: 14px;
     padding: 6px 14px; border-radius: 20px;
     background: rgba(255,193,7,0.15); border: 1px solid rgba(255,193,7,0.35);
     color: var(--amber); font-size: 12px; font-weight: 600;
@@ -439,7 +493,7 @@
     display: none; margin-top: 14px;
     background: var(--panel); border: 1px solid var(--border);
     border-radius: var(--radius-sm); padding: 12px 14px;
-    max-height: 180px; overflow-y: auto;
+    max-height: 110px; overflow-y: auto;
   }
   .ai-activity.show { display: block; }
   .ai-activity h4 { font-size: 12px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
@@ -460,7 +514,7 @@
   </div>
   <div class="topbar-spacer"></div>
   <div class="topbar-actions">
-    <button class="tb-btn" onclick="toggleTM()" id="tmBtn">
+    <button class="tb-btn tm-pill" onclick="toggleTM()" id="tmBtn">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
       Task Manager
     </button>
@@ -555,7 +609,7 @@
 
       <p class="ci-desc">Agentic planning is enabled: the strategy agents will produce the script during generation. Choose a Content Profile to steer the output.</p>
 
-      <button class="btn-gen-script" onclick="genScript()">
+      <button class="btn-gen-script" id="genScriptBtn" onclick="genScript()">
         <span style="font-size:16px">&#10024;</span> Generate Script &amp; Keywords with AI
       </button>
 
@@ -564,7 +618,7 @@
         <textarea class="inp" rows="6" id="videoScript">The ancient Greeks told of a king named Lycaon who ruled Arcadia with cruelty in his heart. One night he invited Zeus to a banquet, and served him a terrible meal made from the flesh of a sacrificed child, to test if the god truly saw all things. Zeus saw through the deception instantly. In a fury he overturned the table, the thunder shook the palace walls, and Lycaon's eyes went wide with terror as his body began to twist and crack with a new wild hunger. Zeus watched him run into the night and decreed that this curse would pass down through his bloodline creating the werewolves we hear about in stories today, so the next time you hear a howl at the moon remember it started with a king who thought he could trick the king of the gods</textarea>
       </div>
 
-      <button class="btn-gen-script" onclick="toast('Keywords generated','ok')">
+      <button class="btn-gen-script" id="genKeywordsBtn" onclick="toast('Keywords generated','ok')">
         <span style="font-size:16px">&#10024;</span> Generate Keywords with AI
       </button>
 
@@ -920,6 +974,11 @@
 
       <div class="video-player" id="videoPlayer">
         <div class="vp-inner" id="vpInner">
+          <div class="vp-film" id="vpFilm">
+            <div class="storm"></div>
+            <span class="badge">1080&times;1920 &middot; 1:11</span>
+            <div class="caption">How <span class="hl">Zeus</span> created the first <span class="hl">werewolf</span></div>
+          </div>
           <div class="vp-placeholder">
             <div class="icon">&#9654;</div>
             <div class="label">Video will appear here</div>
@@ -929,11 +988,8 @@
           <button onclick="toast('Playing...','info')">&#9654;</button>
           <span class="time">0:00 / 1:11</span>
           <div class="spacer"></div>
-          <button onclick="toast('Downloading...','info')">&#8681;</button>
+          <button onclick="toast('Download started','ok')">&#8681;</button>
         </div>
-        <button class="download-btn" onclick="toast('Download started','ok')">
-          &#8681; Download Video
-        </button>
       </div>
     </div>
   </div>
@@ -1069,18 +1125,19 @@
 
   /* ======== AI Activity logs ======== */
   var LOG_LINES = [
-    { ts: 0, msg: "Analyzing niche & audience", cls: "info" },
-    { ts: 2, msg: "Researching: Zeus, Greek mythology, werewolf origin", cls: "info" },
-    { ts: 3, msg: "Strategy: dark storytelling, short-form, dramatic hook", cls: "info" },
-    { ts: 5, msg: "Script draft complete (4 paragraphs)", cls: "ok" },
-    { ts: 7, msg: "Critic review: approved, no revisions needed", cls: "ok" },
-    { ts: 9, msg: "Scene plan: 10 shots identified", cls: "info" },
-    { ts: 11, msg: "Searching materials across 3 providers...", cls: "info" },
-    { ts: 13, msg: "Downloaded 10 clips (avg 5.2s each)", cls: "ok" },
-    { ts: 15, msg: "Rendering subtitles (TikTok Viral preset)", cls: "info" },
-    { ts: 17, msg: "Compositing overlays (title + fact cards)", cls: "info" },
-    { ts: 19, msg: "Video assembly: encoding with libx264", cls: "info" },
-    { ts: 20, msg: "Final video ready (1:11, 1080x1920)", cls: "ok" },
+    { ts: 18, msg: "Analyzing niche & audience", cls: "info" },
+    { ts: 20, msg: "Researching: Zeus, Greek mythology, werewolf origin", cls: "info" },
+    { ts: 22, msg: "Strategy: dark storytelling, short-form dramatic hook", cls: "info" },
+    { ts: 24, msg: "Script draft complete (4 paragraphs)", cls: "ok" },
+    { ts: 26, msg: "Critic review: approved, no revisions needed", cls: "ok" },
+    { ts: 28, msg: "Scene plan: 10 shots identified", cls: "info" },
+    { ts: 30, msg: "Searching materials across 3 providers...", cls: "info" },
+    { ts: 32, msg: "Downloaded 10 clips (avg 5.2s each)", cls: "ok" },
+    { ts: 34, msg: "Rendering subtitles (TikTok Viral preset)", cls: "info" },
+    { ts: 36, msg: "Compositing overlays (title + fact cards)", cls: "info" },
+    { ts: 38, msg: "Video assembly: encoding with libx264", cls: "info" },
+    { ts: 40, msg: "QA factuality gate passed", cls: "ok" },
+    { ts: 42, msg: "Final video ready (1:11, 1080x1920)", cls: "ok" },
   ];
 
   var genState = { phase: "idle", progress: 0 };
@@ -1109,12 +1166,11 @@
     $("videoPlayer").classList.remove("show");
 
     clock.running = true;
-    clock.startTime = performance.now();
-    clock.t = 0;
+    if (!REC) { clock.startTime = performance.now(); clock.t = 0; }
 
     var logIdx = 0;
     var genInterval = setInterval(function() {
-      var p = Math.min(100, genState.progress + (REC ? 8 : 3.5));
+      var p = Math.min(100, genState.progress + (REC ? 0.62 : 3.5));
       genState.progress = p;
       $("progressFill").style.width = p + "%";
       $("progressPct").textContent = Math.round(p) + "%";
@@ -1127,14 +1183,18 @@
       if (p >= 100) {
         clearInterval(genInterval);
         genState.phase = "done";
-        clock.running = false;
+        if (!REC) clock.running = false;
         $("genBtn").disabled = false;
         $("genBtn").textContent = "Generate Video";
         $("statusBar").classList.add("success");
         $("statusText").textContent = "Video Generation Completed";
         $("progressPct").textContent = "100%";
         $("videoPlayer").classList.add("show");
+        $("vpFilm").classList.add("show");
+        $("vpInner").querySelector(".vp-placeholder").style.display = "none";
         toast("Video Generation Completed!", "ok");
+        tmTasks.unshift({ subj: "How zeus created the first werewolf", status: "done", time: "Just now" });
+        renderTM();
       }
     }, REC ? 80 : 200);
   }
@@ -1145,7 +1205,74 @@
     clock.startTime = performance.now();
     if (REC) {
       setTimeout(function() { clock.running = true; }, 100);
+      startAutoSequence();
     }
+  }
+
+  /* ======== REC 自动演示序列 ========
+   * clock.t = 2 × 实际秒数。整条时间线（约 30s 成片）：
+   * t=2    点「Generate Script & Keywords」→ 打字机填入脚本
+   * t=7    点「Generate Keywords」→ 打字机填入关键词
+   * t=10-16 轮巡三个设置页签（Audio → Subtitle → Video）
+   * t=18   点「Generate Video」→ 进度条 + AI 活动日志（13s）
+   * t=46   完成：成片预览 + 任务管理器弹层展示新任务
+   * t=54   收起任务管理器，定格结尾画面
+   */
+  function startAutoSequence() {
+    var SCRIPT_TEXT = $("videoScript").value;
+    var TERMS_TEXT = $("videoTerms").value;
+    // 开场先清空，让打字机效果完整呈现 AI 生成过程
+    $("videoScript").value = "";
+    $("videoTerms").value = "";
+
+    function typeInto(el, text, durMs, done) {
+      var start = performance.now();
+      var len = text.length;
+      (function tick() {
+        var k = Math.min(len, Math.floor((performance.now() - start) / durMs * len));
+        el.value = text.slice(0, k);
+        if (k < len && !el.dataset.skipType) requestAnimationFrame(tick);
+        else { el.value = text; if (done) done(); }
+      })();
+    }
+
+    function pressBtn(btn, fn) {
+      if (!btn) { fn(); return; }
+      btn.classList.add("flash");
+      setTimeout(function() { btn.classList.remove("flash"); }, 320);
+      setTimeout(fn, 160);
+    }
+
+    var SCHEDULE = [
+      { at: 2.0, fn: function() {
+          pressBtn($("genScriptBtn"), function() {
+            typeInto($("videoScript"), SCRIPT_TEXT, 2600, function() {
+              toast("Script & keywords generated!", "ok");
+            });
+          });
+        } },
+      { at: 7.5, fn: function() {
+          pressBtn($("genKeywordsBtn"), function() {
+            typeInto($("videoTerms"), TERMS_TEXT, 1100, function() {
+              toast("Keywords generated", "ok");
+            });
+          });
+        } },
+      { at: 11, fn: function() { switchTab(1); } },
+      { at: 14, fn: function() { switchTab(2); } },
+      { at: 17, fn: function() { switchTab(0); } },
+      { at: 19, fn: function() { pressBtn($("genBtn"), function() { startGen(); }); } },
+      { at: 47, fn: function() { toggleTM(); $("tmBtn").classList.add("flash"); } },
+      { at: 55, fn: function() { toggleTM(); $("tmBtn").classList.remove("flash"); } },
+    ];
+
+    var schedIdx = 0;
+    setInterval(function() {
+      while (schedIdx < SCHEDULE.length && clock.t >= SCHEDULE[schedIdx].at) {
+        SCHEDULE[schedIdx].fn();
+        schedIdx++;
+      }
+    }, 60);
   }
   init();
 </script>

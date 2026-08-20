@@ -4,7 +4,7 @@ Captures frames from demo/index.html?record=1 using Playwright (headless Chromiu
 then encodes docs/reelsync-demo.gif with the bundled ffmpeg (imageio_ffmpeg).
 
 Usage:
-    python scripts/record_demo.py [--fps 10] [--duration 24] [--scale 1066] [--out docs/reelsync-demo.gif]
+    python scripts/record_demo.py [--fps 10] [--duration 30.5] [--scale 1066] [--out docs/reelsync-demo.gif]
 """
 
 import argparse
@@ -34,7 +34,7 @@ def find_chromium():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fps", type=int, default=10)
-    ap.add_argument("--duration", type=float, default=23.5)
+    ap.add_argument("--duration", type=float, default=30.5)
     ap.add_argument("--scale", type=int, default=1066, help="output width; height derived 16:9")
     ap.add_argument("--out", default="docs/reelsync-demo.gif")
     ap.add_argument("--dry", action="store_true", help="only smoke-test the page load")
@@ -64,8 +64,9 @@ def main():
     demo = REPO / "demo" / "index.html"
     url = "file:///" + str(demo).replace("\\", "/") + "?record=1"
 
-    width = 1280
-    height = int(width * 9 / 16)  # 720
+    width = args.scale - (args.scale % 2)
+    height = int(width * 9 / 16)
+    height -= height % 2
 
     with tempfile.TemporaryDirectory(prefix="reelsync_demo_") as td:
         frames = pathlib.Path(td)
@@ -85,9 +86,23 @@ def main():
 
             n_frames = int(args.duration * args.fps)
             print(f"recording {n_frames} frames @ {args.fps}fps for {args.duration}s ...")
+            # 逐帧记录真实采集时刻：截图本身耗时会导致页面时间与帧号脱钩，
+            # 用 concat demuxer 的 per-frame duration 让 GIF 按真实时间轴播放。
+            import time as _time
+
+            stamps = []
+            t0 = _time.perf_counter()
             for i in range(n_frames):
-                page.screenshot(path=str(frames / f"{i:04d}.png"))
-                page.wait_for_timeout(1000 // args.fps)
+                target = t0 + i / args.fps
+                delay = target - _time.perf_counter()
+                if delay > 0:
+                    page.wait_for_timeout(delay * 1000)
+                stamps.append(_time.perf_counter() - t0)
+                # JPEG 直出 + 原生输出分辨率：把单帧采集压到 ~50ms 内，
+                # 避免 GIF 时间轴被截图耗时拉长。
+                page.screenshot(
+                    path=str(frames / f"{i:04d}.jpg"), type="jpeg", quality=90
+                )
             browser.close()
 
         import subprocess
@@ -106,9 +121,18 @@ def main():
             f"[a]palettegen=max_colors=256:stats_mode=diff[pal];"
             f"[b][pal]paletteuse=dither=bayer:bayer_scale=2:diff_mode=rectangle"
         )
+        # concat 清单：每帧带真实采集间隔，保证 GIF 时间轴与页面一致
+        concat_file = frames / "frames.txt"
+        lines = []
+        for i, ts in enumerate(stamps):
+            lines.append(f"file '{i:04d}.jpg'")
+            if i + 1 < len(stamps):
+                lines.append(f"duration {stamps[i + 1] - ts:.4f}")
+        lines.append(f"file '{len(stamps) - 1:04d}.jpg'")
+        concat_file.write_text("\n".join(lines), encoding="utf-8")
         cmd = [
-            FFMPEG, "-y", "-framerate", str(args.fps),
-            "-i", str(frames / "%04d.png"),
+            FFMPEG, "-y", "-f", "concat", "-safe", "0",
+            "-i", str(concat_file),
             "-filter_complex", filter_complex,
             "-loop", "0",
             str(out),
