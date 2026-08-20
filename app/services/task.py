@@ -437,10 +437,20 @@ def generate_terms(task_id, params, video_script):
             # 开启素材按文案顺序匹配后，关键词本身也必须按脚本叙事顺序生成；
             # 否则后续即使顺序下载和顺序拼接，也只能复用一组全局主题词，
             # 无法改善“后面内容的画面提前出现”的问题。
+            # 长视频自动扩充关键词，避免 5 词覆盖 60s+ 导致素材重复
+            try:
+                target_secs = int(getattr(params, "video_duration_seconds", 0) or 0)
+                if not target_secs:
+                    # 回落：用脚本长度估算目标时长（约 2.5 字/秒中文，2.2 词/秒英文）
+                    target_secs = max(30, min(180, len(video_script) // 3))
+            except Exception:
+                target_secs = 60
+            base_amount = 8 if params.match_materials_to_script else 5
+            adaptive_amount = max(base_amount, min(15, (target_secs + 5) // 6))
             video_terms = llm.generate_terms(
                 video_subject=params.video_subject,
                 video_script=video_script,
-                amount=8 if params.match_materials_to_script else 5,
+                amount=adaptive_amount,
                 match_script_order=params.match_materials_to_script,
             )
     else:

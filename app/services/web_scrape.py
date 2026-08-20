@@ -15,9 +15,31 @@ from app.models.schema import MaterialInfo, VideoAspect
 _SEARCH_TIMEOUT_SECONDS = 60
 _DOWNLOAD_TIMEOUT_SECONDS = 300
 
-# 低端设备（8GB 内存、无独显）上 4K 素材会让 moviepy/ffmpeg 解码和重新
-# 编码时内存占用翻几倍，而最终输出仍会被缩放到 1080p 以内。这里把下载
-# 分辨率上限收敛到 1080p，并限制单文件体积防止恶意/异常大文件占满磁盘。
+def _get_max_height() -> int:
+    """读取可配置的抓取分辨率上限，支持 4K（2160）。"""
+    try:
+        from app.config import config
+
+        raw = int(config.app.get("web_scrape_max_height", _MAX_HEIGHT_DEFAULT) or _MAX_HEIGHT_DEFAULT)
+        return max(720, min(4320, raw))
+    except Exception:
+        return _MAX_HEIGHT_DEFAULT
+
+
+def _get_max_filesize() -> str:
+    try:
+        from app.config import config
+
+        raw = str(config.app.get("web_scrape_max_filesize", _MAX_FILESIZE_DEFAULT) or _MAX_FILESIZE_DEFAULT).strip()
+        return raw if raw else _MAX_FILESIZE_DEFAULT
+    except Exception:
+        return _MAX_FILESIZE_DEFAULT
+
+
+_MAX_HEIGHT_DEFAULT = 1080
+_MAX_FILESIZE_DEFAULT = "500M"
+# 兼容旧常量：实际使用 _get_max_height() 动态读取，低端设备仍默认 1080p，
+# 高配用户可在 config.toml 设置 web_scrape_max_height = 2160 以启用 4K。
 _MAX_HEIGHT = 1080
 _MAX_FILESIZE = "500M"
 
@@ -149,7 +171,7 @@ def search_videos_web_scrape(
         "--match-filter",
         f"duration >= {minimum_duration}",
         "--max-filesize",
-        _MAX_FILESIZE,
+        _get_max_filesize(),
         "--ignore-errors",
     ]
 
@@ -349,14 +371,14 @@ def download_web_video(url: str, output_path: str) -> bool:
         output_path,
         "-f",
         (
-            f"bestvideo[ext=mp4][height<={_MAX_HEIGHT}]"
-            f"+bestaudio[ext=m4a]/best[ext=mp4][height<={_MAX_HEIGHT}]"
-            f"/best[height<={_MAX_HEIGHT}]/best"
+            f"bestvideo[ext=mp4][height<={_get_max_height()}]"
+            f"+bestaudio[ext=m4a]/best[ext=mp4][height<={_get_max_height()}]"
+            f"/best[height<={_get_max_height()}]/best"
         ),
         "--merge-output-format",
         "mp4",
         "--max-filesize",
-        _MAX_FILESIZE,
+        _get_max_filesize(),
         "--ignore-errors",
     ]
 

@@ -50,6 +50,7 @@ from .constants import (
     _DEFAULT_VIDEO_CODEC,
     _DEFAULT_VIDEO_PRESET,
     _DEFAULT_VIDEO_CRF,
+    _INTERMEDIATE_VIDEO_CRF,
     _SUPPORTED_VIDEO_CODECS,
     _FFMPEG_CONCAT_TIMEOUT_SECONDS,
     _FFPROBE_TIMEOUT_SECONDS,
@@ -155,6 +156,27 @@ def _get_video_encode_args() -> dict:
     bitrate = str(config.app.get("video_bitrate", "") or "").strip()
     if bitrate:
         args["bitrate"] = bitrate
+    return args
+
+
+def _get_intermediate_encode_args() -> dict:
+    """High-quality args for mix-chunk intermediates (transient, deleted after combine).
+
+    Uses CRF 16 on libx264 to keep generational loss ~0.2dB vs CRF23's ~1-2dB.
+    Keeps user's preset/bitrate; intermediates are forced to libx264 so CRF
+    is honoured (hardware encoders drop -crf).
+    """
+    args = _get_video_encode_args().copy()
+    try:
+        crf = int(args.get("crf", _DEFAULT_VIDEO_CRF))
+    except (TypeError, ValueError):
+        crf = _DEFAULT_VIDEO_CRF
+    # Clamp to at most 16 — if user chose higher quality (e.g. 18) keep it,
+    # if they chose lower quality (28) use 16 for intermediates.
+    args["crf"] = min(crf, _INTERMEDIATE_VIDEO_CRF) if crf > _INTERMEDIATE_VIDEO_CRF else crf
+    # Force 16 when default 23 — common case
+    if args["crf"] == _DEFAULT_VIDEO_CRF:
+        args["crf"] = _INTERMEDIATE_VIDEO_CRF
     return args
 
 
@@ -832,6 +854,7 @@ def _mix_concat_group(
     fps: int,
     threads: int,
     output_file: str,
+    is_intermediate: bool = False,
 ) -> str:
     """把一组片段做 Mix 交叉溶解拼接并写出视频文件，返回 output_file。
 
@@ -853,15 +876,30 @@ def _mix_concat_group(
         final_video = concatenate_videoclips(
             group_clips, padding=-overlap, method="compose"
         )
-        _write_videofile_with_codec_fallback(
-            final_video,
-            output_file,
-            codec=codec,
-            logger=None,
-            fps=fps,
-            threads=threads,
-            **_get_video_encode_args(),
-        )
+        if is_intermediate:
+            # 中间块强制 libx264 + 高质量 CRF，避免硬件编码丢弃 crf
+            intermediate_codec = (
+                _DEFAULT_VIDEO_CODEC if codec != _DEFAULT_VIDEO_CODEC else codec
+            )
+            _write_videofile_with_codec_fallback(
+                final_video,
+                output_file,
+                codec=intermediate_codec,
+                logger=None,
+                fps=fps,
+                threads=threads,
+                **_get_intermediate_encode_args(),
+            )
+        else:
+            _write_videofile_with_codec_fallback(
+                final_video,
+                output_file,
+                codec=codec,
+                logger=None,
+                fps=fps,
+                threads=threads,
+                **_get_video_encode_args(),
+            )
     finally:
         # composite 递归引用组内片段；先关 composite 再关一遍显式列表，
         # 与旧 mix 分支的双重清理一致，确保 reader 一定被释放。
@@ -1215,6 +1253,7 @@ def combine_videos(
                         fps,
                         threads,
                         group_output,
+                        is_intermediate=True,
                     )
                     intermediate_files.append(group_output)
                     next_files.append(group_output)

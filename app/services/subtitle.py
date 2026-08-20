@@ -14,9 +14,11 @@ from loguru import logger
 from app.config import config
 from app.utils import utils
 
-model_size = config.whisper.get("model_size", "small")
+model_size = config.whisper.get("model_size", "medium")
 device = config.whisper.get("device", "cpu")
 compute_type = config.whisper.get("compute_type", "int8")
+# 允许通过 video_language 提升识别准确率（尤其短句）；默认自动检测
+whisper_language = str(config.whisper.get("language", "") or "").strip().lower() or None
 initial_prompt = config.whisper.get("initial_prompt", "") or None
 model = None
 _model_lock = threading.Lock()
@@ -58,14 +60,17 @@ def create(audio_file, subtitle_file: str = ""):
     if not subtitle_file:
         subtitle_file = f"{audio_file}.srt"
 
-    segments, info = model.transcribe(
-        audio_file,
+    transcribe_kwargs: dict = dict(
         beam_size=5,
         word_timestamps=True,
         vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=500),
-        **({"initial_prompt": initial_prompt} if initial_prompt else {}),
     )
+    if initial_prompt:
+        transcribe_kwargs["initial_prompt"] = initial_prompt
+    if whisper_language and whisper_language not in ("auto", ""):
+        transcribe_kwargs["language"] = whisper_language
+    segments, info = model.transcribe(audio_file, **transcribe_kwargs)
 
     logger.info(
         f"detected language: '{info.language}', probability: {info.language_probability:.2f}"

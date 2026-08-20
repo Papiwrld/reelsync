@@ -99,6 +99,8 @@ max_queued_tasks = 100
 video_preset = "medium"
 video_crf = 23
 video_bitrate = ""
+# 输出分辨率：1080p（默认，兼容低端设备）或 4k/2160p（需 4K 素材与更高显存/磁盘）
+video_resolution = "1080p"
 # 自定义成片输出目录：空值表示默认 storage/tasks/<task_id>/；
 # 设置为绝对路径后，成片会额外复制到该目录（文件名含 task_id 前缀），
 # 原始任务目录仍保留，方便在 WebUI/API 中预览与管理。
@@ -113,6 +115,9 @@ upload_post_auto_upload = false
 upload_post_youtube_privacy_status = "public"
 upload_post_max_pending_tasks = 10
 enable_web_scraping = true
+# Web 抓取分辨率上限：1080（默认，低端设备）或 2160（4K，需更高内存与带宽）
+web_scrape_max_height = 1080
+web_scrape_max_filesize = "500M"
 gemini_base_url = ""
 custom_api_video_url = "https://generativelanguage.googleapis.com/v1beta/interactions"
 custom_api_image_url = "https://generativelanguage.googleapis.com/v1beta/interactions"
@@ -123,7 +128,8 @@ auto_providers = [ "custom_api", "pixabay", "coverr", "web_scrape", "pollination
 enable_pollinations = true
 
 [whisper]
-model_size = "small"
+# small=快速/低显存，medium=平衡（推荐，更准尤其非英文），large-v3-turbo=高质量/较慢
+model_size = "medium"
 device = "cpu"
 compute_type = "int8"
 

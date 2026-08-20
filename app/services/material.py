@@ -35,6 +35,16 @@ _AUTO_SEARCH_MAX_WORKERS = 3
 # 10-60s 延迟；3 个 worker 能显著压缩等待，同时避免与 ffmpeg/moviepy 渲染
 # 争抢资源（G：低端设备自适应，与 _AUTO_SEARCH_MAX_WORKERS 同量级）。
 MAX_DOWNLOAD_WORKERS = 3
+_MAX_DOWNLOAD_WORKERS_CAP = 5
+
+
+def _effective_download_workers(required_clip_count: int | None = None) -> int:
+    """根据成片所需片段数自适应并发，短视频保持 3，高时长自动扩到 5。"""
+    if not required_clip_count or required_clip_count <= 6:
+        return MAX_DOWNLOAD_WORKERS
+    # 6 段以上每 6 段 +1 worker，上限 5
+    workers = MAX_DOWNLOAD_WORKERS + (required_clip_count - 6 + 5) // 6
+    return max(MAX_DOWNLOAD_WORKERS, min(_MAX_DOWNLOAD_WORKERS_CAP, workers))
 
 # 素材搜索/下载是网络 IO，瞬时的 DNS、连接重置或供应商 5xx/限流不应让整个
 # 片段静默缺素材。这里做有限次指数退避重试：失败成本低，重试能显著提高
@@ -347,40 +357,48 @@ def search_videos_pexels(
             if duration < minimum_duration:
                 continue
             video_files = v["video_files"]
-            # loop through each url to determine the best quality
+            # 优先选取分辨率满足目标且面积最大的 rendition（支持 4K 向上兼容 1080p）
+            best_video = None
+            best_pixels = -1
             for video in video_files:
+                try:
+                    w = int(video["width"])
+                    h = int(video["height"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if _matches_video_aspect(w, h, aspect) and w >= video_width and h >= video_height:
+                    pixels = w * h
+                    if pixels > best_pixels:
+                        best_pixels = pixels
+                        best_video = video
+            if best_video is not None:
+                video = best_video
                 w = int(video["width"])
                 h = int(video["height"])
-                if (
-                    _matches_video_aspect(w, h, aspect)
-                    and w == video_width
-                    and h == video_height
-                ):
-                    item = MaterialInfo()
-                    item.provider = "pexels"
-                    item.url = video["link"]
-                    item.duration = duration
-                    item.source_info = {
-                        "provider": "pexels",
-                        "search_term": search_term,
-                        "title": str(v.get("title") or ""),
-                        "asset_id": (
-                            str(v.get("id")) if v.get("id") is not None else None
+                item = MaterialInfo()
+                item.provider = "pexels"
+                item.url = video["link"]
+                item.duration = duration
+                item.source_info = {
+                    "provider": "pexels",
+                    "search_term": search_term,
+                    "title": str(v.get("title") or ""),
+                    "asset_id": (
+                        str(v.get("id")) if v.get("id") is not None else None
+                    ),
+                    "source_page": _safe_public_url(v.get("url")),
+                    "creator": _creator_info(v.get("user")),
+                    "rendition": {
+                        "id": (
+                            str(video.get("id"))
+                            if video.get("id") is not None
+                            else None
                         ),
-                        "source_page": _safe_public_url(v.get("url")),
-                        "creator": _creator_info(v.get("user")),
-                        "rendition": {
-                            "id": (
-                                str(video.get("id"))
-                                if video.get("id") is not None
-                                else None
-                            ),
-                            "width": w,
-                            "height": h,
-                        },
-                    }
-                    video_items.append(item)
-                    break
+                        "width": w,
+                        "height": h,
+                    },
+                }
+                video_items.append(item)
         return video_items
     except Exception as e:
         logger.error(
@@ -465,7 +483,10 @@ def search_videos_pixabay(
             if duration < minimum_duration:
                 continue
             video_files = v["videos"]
-            # loop through each url to determine the best quality
+            # 选取满足分辨率且面积最大的 rendition，优先 4K
+            best_video = None
+            best_pixels = -1
+            best_type = ""
             for video_type in video_files:
                 video = video_files[video_type]
                 try:
@@ -473,38 +494,43 @@ def search_videos_pixabay(
                     h = int(video["height"])
                 except (KeyError, TypeError, ValueError):
                     continue
-                # Pixabay 很少返回原生方形视频；1:1 输出继续接受满足分辨率的
-                # 候选并由合成阶段裁剪。横竖屏则必须严格匹配目标方向。
                 orientation_matches = aspect == VideoAspect.square or (
                     _matches_video_aspect(w, h, aspect)
                 )
-                if orientation_matches and w >= video_width:
-                    item = MaterialInfo()
-                    item.provider = "pixabay"
-                    item.url = video["url"]
-                    item.duration = duration
-                    item.source_info = {
-                        "provider": "pixabay",
-                        "search_term": search_term,
-                        "tags": str(v.get("tags") or ""),
-                        "asset_id": (
-                            str(v.get("id")) if v.get("id") is not None else None
-                        ),
-                        "source_page": _safe_public_url(v.get("pageURL")),
-                        "creator": _creator_info(
-                            {
-                                "id": v.get("user_id"),
-                                "name": v.get("user"),
-                            }
-                        ),
-                        "rendition": {
-                            "id": video_type,
-                            "width": w,
-                            "height": video.get("height"),
-                        },
-                    }
-                    video_items.append(item)
-                    break
+                if orientation_matches and w >= video_width and h >= video_height:
+                    pixels = w * h
+                    if pixels > best_pixels:
+                        best_pixels = pixels
+                        best_video = video
+                        best_type = video_type
+            if best_video is not None:
+                video = best_video
+                w = int(best_video["width"])
+                item = MaterialInfo()
+                item.provider = "pixabay"
+                item.url = video["url"]
+                item.duration = duration
+                item.source_info = {
+                    "provider": "pixabay",
+                    "search_term": search_term,
+                    "tags": str(v.get("tags") or ""),
+                    "asset_id": (
+                        str(v.get("id")) if v.get("id") is not None else None
+                    ),
+                    "source_page": _safe_public_url(v.get("pageURL")),
+                    "creator": _creator_info(
+                        {
+                            "id": v.get("user_id"),
+                            "name": v.get("user"),
+                        }
+                    ),
+                    "rendition": {
+                        "id": best_type,
+                        "width": w,
+                        "height": video.get("height"),
+                    },
+                }
+                video_items.append(item)
         return video_items
     except Exception as e:
         error_message = _redact_request_error(e, api_key)
@@ -1345,7 +1371,8 @@ def _download_with_concurrent_prefix(
 
     if prefix_len:
         prefix_tasks = tasks[:prefix_len]
-        with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
+        effective_workers = _effective_download_workers(prefix_len)
+        with ThreadPoolExecutor(max_workers=effective_workers) as pool:
             futures = {
                 pool.submit(
                     _download_material_item,

@@ -41,6 +41,8 @@ class VideoAspect(str, Enum):
     def to_resolution(self):
         """返回该画幅对应的输出分辨率（宽, 高）。"""
         try:
+            if _is_4k_requested():
+                return ASPECT_RESOLUTIONS_4K[self]
             return ASPECT_RESOLUTIONS[self]
         except (KeyError, TypeError):
             raise ValueError(f"unsupported video aspect: {self}") from None
@@ -137,6 +139,25 @@ ASPECT_RESOLUTIONS: dict[VideoAspect, tuple[int, int]] = {
     VideoAspect.portrait: (1080, 1920),
     VideoAspect.square: (1080, 1080),
 }
+
+ASPECT_RESOLUTIONS_4K: dict[VideoAspect, tuple[int, int]] = {
+    VideoAspect.landscape: (3840, 2160),
+    VideoAspect.portrait: (2160, 3840),
+    VideoAspect.square: (2160, 2160),
+}
+
+
+def _is_4k_requested() -> bool:
+    try:
+        return str(config.app.get("video_resolution", "1080p") or "1080p").strip().lower() in (
+            "4k",
+            "2160p",
+            "uhd",
+            "3840x2160",
+            "2160x3840",
+        )
+    except Exception:
+        return False
 
 # 支持直接解析的字符串形式，兼容 UI 值、CLI 参数和上游返回的宽松格式。
 _ASPECT_STRING_VARIANTS: dict[str, VideoAspect] = {

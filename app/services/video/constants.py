@@ -35,6 +35,9 @@ _MIN_DIMENSION_TOLERANCE = 10
 _DEFAULT_VIDEO_CODEC = "libx264"
 _DEFAULT_VIDEO_PRESET = "medium"
 _DEFAULT_VIDEO_CRF = 23
+# 中间分块（mix-chunk）使用更高质量，避免多次有损重编码的色偏与锐度损失。
+# 最终成片仍按用户配置的 video_crf 编码，中间块仅为临时文件。
+_INTERMEDIATE_VIDEO_CRF = 16
 _SUPPORTED_VIDEO_CODECS = (
     "libx264",
     "h264_nvenc",
