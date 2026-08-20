@@ -533,7 +533,13 @@
     "Overlay Background Color": "Цвет фона оверлея",
     "Overlay Opacity": "Непрозрачность оверлея",
     "Subtitle Preset TikTok": "В стиле TikTok",
-    "Subtitle Preset CapCut": "В стиле CapCut"
+    "Subtitle Preset CapCut": "В стиле CapCut",
+    "LLM API Key Invalid": "Ваш API-ключ LLM недействителен или отсутствует. Откройте настройки и обновите его.",
+    "LLM Rate Limited": "Достигнут лимит запросов. Подождите немного и попробуйте снова.",
+    "LLM Quota Exceeded": "Проблема с квотой или оплатой у провайдера. Проверьте свой аккаунт у провайдера LLM.",
+    "LLM Timeout": "Провайдер LLM отвечал слишком долго. Попробуйте снова.",
+    "LLM Unreachable": "Не удалось подключиться к провайдеру LLM. Проверьте сеть или настройки прокси.",
+    "LLM Request Failed": "Запрос к LLM не удался. Проверьте конфигурацию провайдера в настройках."
   },
   "Agent Stage Intelligence": "Анализ ниши и аудитории",
   "Agent Stage Research": "Исследование темы",

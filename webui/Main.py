@@ -382,26 +382,51 @@ def _format_task_subject(subject, max_length=30):
     return f"{subject[:max_length]}..."
 
 
-def _safe_load_task_script(task_path):
+# 任务管理 fragment 每 2 秒轮询一次历史任务。script.json 与成片探测按
+# (目录, 目录 mtime) 缓存：目录未变化时直接复用，避免空闲时每 2 秒产生
+# 数十次文件读取。超上限时整体清空（键含 mtime，天然去旧）。
+_TASK_FILE_CACHE_MAX = 256
+_task_script_cache = {}
+_task_final_video_cache = {}
+
+
+def _safe_load_task_script(task_path, mtime=None):
+    # 以 script.json 自身的 mtime 作为缓存键：文件被原地覆写时目录 mtime
+    # 不一定变化，文件级 mtime 才能保证恢复/重生成后读到新内容。
     script_file = os.path.join(task_path, "script.json")
-    if not os.path.isfile(script_file):
+    try:
+        file_mtime = os.stat(script_file).st_mtime
+    except OSError:
         return {}
+
+    cache_key = (script_file, file_mtime)
+    if cache_key in _task_script_cache:
+        return _task_script_cache[cache_key]
 
     try:
         with open(script_file, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except Exception as e:
         logger.warning(f"failed to read task script data: {script_file}, {e}")
         return {}
 
+    if len(_task_script_cache) >= _TASK_FILE_CACHE_MAX:
+        _task_script_cache.clear()
+    _task_script_cache[cache_key] = data
+    return data
 
-def _find_final_task_video(task_path: str) -> str:
+
+def _find_final_task_video(task_path: str, mtime=None) -> str:
     """
     返回任务目录中序号最小的最终成片。
 
     合成流程还会产生 combined、temp-clip 和 MoviePy 临时文件，这些文件不能
     表示任务已成功完成，因此这里只接受 ``final-<序号>.<扩展名>``。
     """
+    cache_key = (task_path, mtime)
+    if mtime is not None and cache_key in _task_final_video_cache:
+        return _task_final_video_cache[cache_key]
+
     try:
         files = os.listdir(task_path)
     except OSError:
@@ -414,10 +439,16 @@ def _find_final_task_video(task_path: str) -> str:
             candidates.append((int(match.group("index")), file_name))
 
     if not candidates:
-        return ""
+        result = ""
+    else:
+        _, file_name = min(candidates, key=lambda item: item[0])
+        result = os.path.join(task_path, file_name)
 
-    _, file_name = min(candidates, key=lambda item: item[0])
-    return os.path.join(task_path, file_name)
+    if mtime is not None:
+        if len(_task_final_video_cache) >= _TASK_FILE_CACHE_MAX:
+            _task_final_video_cache.clear()
+        _task_final_video_cache[cache_key] = result
+    return result
 
 
 def _build_restore_upload_requirements(params: Mapping) -> dict:
@@ -581,9 +612,9 @@ def _scan_history_tasks(limit=30):
     task_entries.sort(key=lambda item: item[0], reverse=True)
     tasks = []
     for mtime, name, task_path in task_entries[:limit]:
-        script_data = _safe_load_task_script(task_path)
+        script_data = _safe_load_task_script(task_path, mtime)
         params_data = script_data.get("params", {}) if script_data else {}
-        video_file = _find_final_task_video(task_path)
+        video_file = _find_final_task_video(task_path, mtime)
         subject = (
             params_data.get("video_subject")
             or script_data.get("script", "")[:40]
@@ -2736,6 +2767,42 @@ def _generation_in_progress():
     return False
 
 
+class UserFacingError(RuntimeError):
+    """用户可直接阅读的操作失败（如 API Key 无效、限流）。
+
+    抛出该异常时，_run_with_state_status 会以 st.error 呈现简洁信息并正常
+    返回，而不是把原始堆栈抛给 Streamlit 展示。
+    """
+
+
+def _friendly_llm_error(message: str) -> str:
+    """把 LLM 层返回的原始错误串压缩成一句用户能直接读懂的提示。"""
+    raw = str(message or "").strip()
+    lowered = raw.lower()
+    if "invalid_api_key" in lowered or "incorrect api key" in lowered or " 401" in lowered:
+        return tr("LLM API Key Invalid")
+    if " 429" in lowered or "rate limit" in lowered:
+        return tr("LLM Rate Limited")
+    if "quota" in lowered or "billing" in lowered or "exceeded" in lowered:
+        return tr("LLM Quota Exceeded")
+    if "timeout" in lowered or "timed out" in lowered:
+        return tr("LLM Timeout")
+    if (
+        "connection" in lowered
+        or "network" in lowered
+        or "unreachable" in lowered
+        or "proxy" in lowered
+        or "resolve" in lowered
+    ):
+        return tr("LLM Unreachable")
+    # 兜底：去掉 "Error: " 前缀，只保留第一行有意义的文本。
+    line = next(
+        (ln.strip() for ln in raw.splitlines() if ln.strip()),
+        "",
+    )
+    return line.removeprefix("Error:").strip() or tr("LLM Request Failed")
+
+
 def _run_with_state_status(
     key,
     running_label,
@@ -2799,6 +2866,17 @@ def _run_with_state_status(
                 "log": st.session_state[key].get("log") or [],
             }
             raise
+        if isinstance(exc, UserFacingError):
+            # 用户可读的失败：直接以简洁错误呈现，不抛堆栈。
+            detail = str(exc)
+            st.session_state[key] = {
+                "state": "error",
+                "label": done_label,
+                "detail": detail[:400],
+                "log": st.session_state[key].get("log") or [],
+            }
+            st.error(detail)
+            return None
         detail = (
             error_detail(exc)
             if callable(error_detail)
@@ -2907,7 +2985,7 @@ def _generate_script_preview(params, progress=None):
                 target_duration_seconds=getattr(params, "video_duration_seconds", 0) or 0,
             )
             if "Error: " in script:
-                raise RuntimeError(str(script))
+                raise UserFacingError(_friendly_llm_error(script))
             st.session_state["video_script"] = script
             st.session_state["script_generation_summary"] = (
                 f"{len(script.split())} words (linear fallback)"
@@ -2953,9 +3031,9 @@ def _generate_script_preview(params, progress=None):
         "generate_script_and_terms", generate_script_and_terms
     )
     if "Error: " in script:
-        raise RuntimeError(str(script))
+        raise UserFacingError(_friendly_llm_error(script))
     if "Error: " in terms:
-        raise RuntimeError(str(terms))
+        raise UserFacingError(_friendly_llm_error(terms))
     st.session_state["video_script"] = script
     st.session_state["video_terms"] = ", ".join(terms)
     st.session_state["script_generation_summary"] = (
@@ -2977,7 +3055,7 @@ def _generate_terms_preview(params):
         ),
     )
     if "Error: " in terms:
-        raise RuntimeError(str(terms))
+        raise UserFacingError(_friendly_llm_error(terms))
     st.session_state["video_terms"] = ", ".join(terms)
     st.session_state["terms_generation_summary"] = f"{len(terms)} keyword(s)"
     return terms
@@ -3201,7 +3279,7 @@ def _render_script_settings(panel, params):
                                 tr("Profile Imported"),
                                 lambda: _import_social_profile(profile_url),
                                 success_detail=lambda: _social_profile_summary(),
-                                error_detail=lambda exc: str(exc),
+                                error_detail=lambda exc: _friendly_llm_error(exc) if isinstance(exc, UserFacingError) else str(exc),
                             )
                         st.caption(tr("Social Profile Import Hint"))
                         imported = st.session_state.get("social_profile_inference")
@@ -3658,7 +3736,7 @@ def _render_script_settings(panel, params):
                         success_detail=lambda: st.session_state.get(
                             "script_generation_summary", ""
                         ),
-                        error_detail=lambda exc: str(exc),
+                        error_detail=lambda exc: _friendly_llm_error(exc) if isinstance(exc, UserFacingError) else str(exc),
                     )
             params.video_script = st.text_area(
                 tr("Video Script"),
@@ -3693,7 +3771,7 @@ def _render_script_settings(panel, params):
                         success_detail=lambda: st.session_state.get(
                             "terms_generation_summary", ""
                         ),
-                        error_detail=lambda exc: str(exc),
+                        error_detail=lambda exc: _friendly_llm_error(exc) if isinstance(exc, UserFacingError) else str(exc),
                     )
 
             params.video_terms = st.text_area(

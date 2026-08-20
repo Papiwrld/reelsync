@@ -560,7 +560,13 @@
     "Overlay Background Color": "Overlay Background Color",
     "Overlay Opacity": "Overlay Opacity",
     "Subtitle Preset TikTok": "TikTok Viral",
-    "Subtitle Preset CapCut": "CapCut Clean"
+    "Subtitle Preset CapCut": "CapCut Clean",
+    "LLM API Key Invalid": "Your LLM API key is invalid or missing. Open Settings and update it.",
+    "LLM Rate Limited": "Rate limit reached. Wait a moment and try again.",
+    "LLM Quota Exceeded": "Provider quota or billing issue. Check your account with the LLM provider.",
+    "LLM Timeout": "The LLM provider took too long to respond. Try again.",
+    "LLM Unreachable": "Could not reach the LLM provider. Check your network or proxy settings.",
+    "LLM Request Failed": "The LLM request failed. Check your provider configuration in Settings."
   },
   "Agent Stage Intelligence": "Analyzing the niche & audience",
   "Agent Stage Research": "Researching the topic",

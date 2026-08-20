@@ -533,7 +533,13 @@
     "Overlay Background Color": "Màu Nền Lớp Phủ",
     "Overlay Opacity": "Độ Mờ Lớp Phủ",
     "Subtitle Preset TikTok": "Phong cach TikTok",
-    "Subtitle Preset CapCut": "Go gon kieu CapCut"
+    "Subtitle Preset CapCut": "Go gon kieu CapCut",
+    "LLM API Key Invalid": "Khóa API LLM của bạn không hợp lệ hoặc bị thiếu. Mở Cài đặt và cập nhật.",
+    "LLM Rate Limited": "Đã đạt giới hạn yêu cầu. Hãy đợi một lát rồi thử lại.",
+    "LLM Quota Exceeded": "Vấn đề hạn mức hoặc thanh toán của nhà cung cấp. Kiểm tra tài khoản tại nhà cung cấp LLM.",
+    "LLM Timeout": "Nhà cung cấp LLM phản hồi quá lâu. Vui lòng thử lại.",
+    "LLM Unreachable": "Không thể kết nối tới nhà cung cấp LLM. Kiểm tra mạng hoặc cấu hình proxy.",
+    "LLM Request Failed": "Yêu cầu LLM thất bại. Kiểm tra cấu hình nhà cung cấp trong Cài đặt."
   },
   "Agent Stage Intelligence": "Đang phân tích niche & khán giả",
   "Agent Stage Research": "Đang nghiên cứu chủ đề",

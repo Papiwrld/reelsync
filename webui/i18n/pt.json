@@ -533,7 +533,13 @@
     "Overlay Background Color": "Cor de fundo da sobreposição",
     "Overlay Opacity": "Opacidade da sobreposição",
     "Subtitle Preset TikTok": "Viral estilo TikTok",
-    "Subtitle Preset CapCut": "Limpo estilo CapCut"
+    "Subtitle Preset CapCut": "Limpo estilo CapCut",
+    "LLM API Key Invalid": "Sua chave de API do LLM é inválida ou está ausente. Abra os Ajustes e atualize-a.",
+    "LLM Rate Limited": "Limite de requisições atingido. Aguarde um momento e tente novamente.",
+    "LLM Quota Exceeded": "Problema de cota ou faturamento do provedor. Verifique sua conta no provedor do LLM.",
+    "LLM Timeout": "O provedor do LLM demorou demais para responder. Tente novamente.",
+    "LLM Unreachable": "Não foi possível acessar o provedor do LLM. Verifique sua rede ou proxy.",
+    "LLM Request Failed": "A requisição ao LLM falhou. Verifique a configuração do provedor nos Ajustes."
   },
   "Agent Stage Intelligence": "Analisando nicho e público",
   "Agent Stage Research": "Pesquisando o tópico",

@@ -534,7 +534,13 @@
     "Overlay Background Color": "Warna Latar Overlay",
     "Overlay Opacity": "Opasitas Overlay",
     "Subtitle Preset TikTok": "Viral ala TikTok",
-    "Subtitle Preset CapCut": "Bersih ala CapCut"
+    "Subtitle Preset CapCut": "Bersih ala CapCut",
+    "LLM API Key Invalid": "Kunci API LLM kamu tidak valid atau belum diisi. Buka Pengaturan dan perbarui.",
+    "LLM Rate Limited": "Batas permintaan tercapai. Tunggu sebentar lalu coba lagi.",
+    "LLM Quota Exceeded": "Masalah kuota atau penagihan penyedia. Periksa akunmu di penyedia LLM.",
+    "LLM Timeout": "Penyedia LLM membutuhkan waktu terlalu lama. Coba lagi.",
+    "LLM Unreachable": "Tidak dapat menghubungi penyedia LLM. Periksa jaringan atau pengaturan proxy.",
+    "LLM Request Failed": "Permintaan LLM gagal. Periksa konfigurasi penyedia di Pengaturan."
   },
   "Agent Stage Intelligence": "Menganalisis niche & audiens",
   "Agent Stage Research": "Meneliti topik",

@@ -534,7 +534,13 @@
     "Overlay Background Color": "Katman Arka Plan Rengi",
     "Overlay Opacity": "Katman Opaklığı",
     "Subtitle Preset TikTok": "TikTok Viral",
-    "Subtitle Preset CapCut": "CapCut Temiz"
+    "Subtitle Preset CapCut": "CapCut Temiz",
+    "LLM API Key Invalid": "LLM API anahtarınız geçersiz veya eksik. Ayarlar'ı açıp güncelleyin.",
+    "LLM Rate Limited": "İstek sınırına ulaşıldı. Bir süre bekleyip tekrar deneyin.",
+    "LLM Quota Exceeded": "Sağlayıcı kotası veya faturalama sorunu. LLM sağlayıcınızdaki hesabınızı kontrol edin.",
+    "LLM Timeout": "LLM sağlayıcısı yanıt vermek için çok uzun sürdü. Tekrar deneyin.",
+    "LLM Unreachable": "LLM sağlayıcısına ulaşılamadı. Ağınızı veya proxy ayarlarınızı kontrol edin.",
+    "LLM Request Failed": "LLM isteği başarısız oldu. Ayarlar'dan sağlayıcı yapılandırmasını kontrol edin."
   },
   "Agent Stage Intelligence": "Niş ve kitle analiz ediliyor",
   "Agent Stage Research": "Konu araştırılıyor",
