@@ -1,0 +1,1153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ReelSync - Interactive Product Simulation</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23ff4b4b'/%3E%3Cpath d='M11 8l13 8-13 8z' fill='white'/%3E%3C/svg%3E" />
+<style>
+  :root {
+    --bg: #16161a;
+    --bg2: #21212b;
+    --panel: #1c1c24;
+    --panel2: #22232c;
+    --border: rgba(255,255,255,0.08);
+    --border-strong: rgba(255,255,255,0.14);
+    --text: #fafafa;
+    --muted: #9aa0ab;
+    --dim: #6b7079;
+    --accent: #ff4b4b;
+    --accent-grad: linear-gradient(135deg, #ff5a5a 0%, #e03131 100%);
+    --green: #4CAF50;
+    --green-soft: rgba(76,175,80,0.14);
+    --blue: #2196F3;
+    --amber: #FFC107;
+    --radius: 16px;
+    --radius-sm: 10px;
+    --font: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 15px;
+    line-height: 1.45;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: rgba(255,75,75,0.35); }
+  button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+  input, textarea, select { font-family: inherit; }
+
+  /* ---------- Top bar ---------- */
+  .topbar {
+    height: 56px; flex: 0 0 56px;
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 24px;
+    background: rgba(22,22,26,0.92);
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(12px);
+    z-index: 100;
+    position: sticky; top: 0;
+  }
+  .brand { display: flex; align-items: baseline; gap: 8px; }
+  .brand-name { font-size: 2.75rem; font-weight: 800; letter-spacing: -1.5px; line-height: 1; }
+  .brand-version { font-size: 1rem; opacity: 0.72; font-weight: 400; }
+  .topbar-spacer { flex: 1; }
+  .topbar-actions { display: flex; align-items: center; gap: 6px; }
+  .tb-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 14px; border-radius: 8px;
+    font-size: 14px; font-weight: 500; color: var(--muted);
+    transition: all .15s;
+    background: transparent; border: 1px solid transparent;
+  }
+  .tb-btn:hover { color: var(--text); background: rgba(255,255,255,0.05); border-color: var(--border); }
+  .tb-btn svg { width: 18px; height: 18px; opacity: 0.7; }
+  .lang-sel {
+    padding: 6px 10px; border-radius: 8px; font-size: 13px;
+    background: var(--bg2); color: var(--text); border: 1px solid var(--border);
+    width: 120px; appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%239aa0ab'%3E%3Cpath d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 8px center;
+    cursor: pointer;
+  }
+
+  /* ---------- Main layout ---------- */
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1.1fr 2.2fr;
+    gap: 0;
+    min-height: calc(100vh - 56px);
+  }
+
+  /* ---------- Left panel ---------- */
+  .left-panel {
+    border-right: 1px solid var(--border);
+    padding: 16px;
+    overflow-y: auto;
+    max-height: calc(100vh - 56px);
+  }
+  .left-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+  .left-card h3 {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 14px;
+    letter-spacing: -0.3px;
+  }
+  .field { margin-bottom: 14px; }
+  .field-label {
+    font-size: 13px; font-weight: 600; color: var(--muted);
+    margin-bottom: 5px; display: block;
+  }
+  .field-help {
+    font-size: 12px; color: var(--dim); margin-top: 3px;
+  }
+  .checkbox-row {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 12px;
+  }
+  .checkbox-row input[type="checkbox"] {
+    width: 18px; height: 18px; accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .checkbox-row label {
+    font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .checkbox-row .badge {
+    font-size: 11px; padding: 2px 8px; border-radius: 12px;
+    background: rgba(255,75,75,0.12); color: var(--accent); font-weight: 600;
+  }
+  .sel, .inp {
+    width: 100%; padding: 9px 12px; border-radius: var(--radius-sm);
+    background: var(--bg2); color: var(--text); border: 1px solid var(--border);
+    font-size: 14px; transition: border-color .15s;
+  }
+  .sel:hover, .inp:hover { border-color: rgba(255,75,75,0.3); }
+  .sel:focus, .inp:focus { outline: none; border-color: var(--accent); }
+  textarea.inp { resize: vertical; min-height: 60px; line-height: 1.5; }
+  .sel {
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%239aa0ab'%3E%3Cpath d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center;
+    padding-right: 30px; cursor: pointer;
+  }
+  .expander {
+    border: none; border-top: 1px solid var(--border);
+    padding: 10px 0 0 0; margin: 4px 0 14px 0;
+    cursor: pointer; display: flex; align-items: center; gap: 6px;
+    font-size: 14px; font-weight: 500; color: var(--muted);
+    background: none; width: 100%; text-align: left;
+    opacity: 0.78; transition: opacity .15s;
+  }
+  .expander:hover { opacity: 1; }
+  .expander .arrow { transition: transform .2s; font-size: 10px; }
+  .expander.open .arrow { transform: rotate(90deg); }
+  .expander-body { display: none; padding: 8px 0 0 0; }
+  .expander-body.open { display: block; }
+  .btn-gen-script {
+    width: 100%; padding: 10px; border-radius: var(--radius-sm);
+    background: var(--bg2); color: var(--text); border: 1px solid var(--border);
+    font-size: 14px; font-weight: 500;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    transition: all .15s; margin-bottom: 14px;
+  }
+  .btn-gen-script:hover { border-color: var(--accent); background: rgba(255,75,75,0.06); }
+  .ci-desc {
+    font-size: 13px; color: var(--dim); margin-top: 4px;
+    line-height: 1.45;
+  }
+
+  /* ---------- Right panel ---------- */
+  .right-panel {
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Tabs */
+  .tab-bar {
+    display: flex; gap: 0; padding: 0 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    flex-shrink: 0;
+  }
+  .tab-btn {
+    padding: 14px 20px;
+    font-size: 1.1rem; font-weight: 600;
+    color: var(--muted); border-bottom: 3px solid transparent;
+    transition: all .15s; cursor: pointer;
+    background: none; border-top: none; border-left: none; border-right: none;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* Tab content */
+  .tab-content {
+    flex: 1; overflow-y: auto; padding: 16px;
+    max-height: calc(100vh - 56px - 49px);
+  }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+  .right-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px;
+  }
+  .right-card h3 {
+    font-size: 1.1rem; font-weight: 700;
+    margin-bottom: 18px; letter-spacing: -0.3px;
+  }
+  .field-row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  }
+  .seg-ctrl {
+    display: flex; gap: 0; border-radius: var(--radius-sm); overflow: hidden;
+    border: 1px solid var(--border); margin-bottom: 16px;
+  }
+  .seg-btn {
+    flex: 1; padding: 10px 16px; text-align: center;
+    font-size: 14px; font-weight: 500;
+    background: var(--bg2); color: var(--muted);
+    border: none; border-right: 1px solid var(--border);
+    transition: all .15s; cursor: pointer;
+  }
+  .seg-btn:last-child { border-right: none; }
+  .seg-btn.active {
+    background: rgba(255,75,75,0.1); color: var(--accent);
+    font-weight: 600;
+  }
+  .voice-preview-btns {
+    display: flex; gap: 10px; margin-top: 14px;
+  }
+  .vp-btn {
+    flex: 1; padding: 10px 16px; border-radius: var(--radius-sm);
+    background: var(--bg2); color: var(--text); border: 1px solid var(--border);
+    font-size: 14px; font-weight: 500;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    transition: all .15s;
+  }
+  .vp-btn:hover { border-color: var(--accent); background: rgba(255,75,75,0.06); }
+  .slider-row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  }
+  .slider-group { display: flex; flex-direction: column; gap: 4px; }
+  .slider-group label { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .slider-group .sel { width: 100%; }
+  .info-text {
+    font-size: 13px; color: var(--dim); margin-top: 6px;
+  }
+  .section-divider {
+    border: none; border-top: 1px solid var(--border);
+    margin: 18px 0;
+  }
+
+  /* Subtitle preview */
+  .sub-preview {
+    width: 100%; height: 120px; border-radius: var(--radius-sm);
+    background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+    border: 1px solid var(--border);
+    display: grid; place-items: center;
+    margin: 14px 0;
+    position: relative; overflow: hidden;
+  }
+  .sub-preview .preview-text {
+    font-size: 28px; font-weight: 800; color: #fff;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.6);
+    letter-spacing: -0.5px;
+  }
+  .sub-preview .preview-text .hl { color: var(--amber); }
+
+  /* ---------- Bottom section ---------- */
+  .bottom-section {
+    border-top: 1px solid var(--border);
+    padding: 14px 16px;
+    background: var(--bg);
+    flex-shrink: 0;
+  }
+  .generate-btn {
+    width: 100%; padding: 16px 24px; border-radius: 16px;
+    background: var(--accent-grad); color: #fff;
+    font-size: 1.1rem; font-weight: 700;
+    box-shadow: 0 6px 20px rgba(224,49,49,0.35);
+    transition: all .2s; letter-spacing: -0.2px;
+    border: none; cursor: pointer;
+  }
+  .generate-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 28px rgba(224,49,49,0.45);
+  }
+  .generate-btn:disabled {
+    opacity: 0.45; filter: grayscale(0.9);
+    cursor: not-allowed; transform: none !important;
+    box-shadow: none !important;
+  }
+
+  /* Status / progress */
+  .status-bar {
+    display: none; margin-top: 14px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 14px 16px;
+  }
+  .status-bar.show { display: block; }
+  .status-bar.success { border-color: rgba(76,175,80,0.35); background: rgba(76,175,80,0.06); }
+  .status-bar.fail { border-color: rgba(255,75,75,0.35); background: rgba(255,75,75,0.06); }
+  .status-text { font-size: 14px; font-weight: 500; }
+  .status-bar.success .status-text { color: var(--green); }
+  .progress-track {
+    height: 6px; border-radius: 3px; background: var(--bg2);
+    margin-top: 10px; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; border-radius: 3px; background: var(--accent-grad);
+    width: 0%; transition: width .3s;
+  }
+  .progress-pct { font-size: 12px; color: var(--dim); margin-top: 4px; text-align: right; }
+
+  /* Video player */
+  .video-player {
+    display: none; margin-top: 14px;
+    background: #000; border-radius: var(--radius);
+    overflow: hidden; position: relative;
+  }
+  .video-player.show { display: block; }
+  .video-player .vp-inner {
+    position: relative; width: 100%; aspect-ratio: 9/16;
+    max-height: 400px; margin: 0 auto;
+    background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+    display: grid; place-items: center;
+  }
+  .video-player .vp-inner video {
+    width: 100%; height: 100%; object-fit: contain;
+  }
+  .vp-placeholder {
+    text-align: center; color: var(--dim);
+  }
+  .vp-placeholder .icon { font-size: 48px; margin-bottom: 8px; }
+  .vp-placeholder .label { font-size: 14px; }
+  .vp-controls {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; background: var(--panel);
+  }
+  .vp-controls button {
+    width: 32px; height: 32px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--bg2); color: var(--text); font-size: 14px;
+    transition: background .15s;
+  }
+  .vp-controls button:hover { background: var(--panel2); }
+  .vp-controls .time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .vp-controls .spacer { flex: 1; }
+  .download-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 16px; border-radius: 10px;
+    background: var(--bg2); color: var(--text); border: 1px solid var(--border);
+    font-size: 13px; font-weight: 500; margin-top: 10px;
+    transition: all .15s;
+  }
+  .download-btn:hover { border-color: var(--accent); }
+
+  /* Task Manager popover */
+  .tm-popover {
+    display: none; position: fixed; top: 52px; right: 24px;
+    width: min(520px, calc(100vw - 48px));
+    background: rgba(30,30,34,0.92); border: 1px solid var(--border);
+    border-radius: 16px; padding: 16px;
+    backdrop-filter: blur(16px); z-index: 200;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  .tm-popover.show { display: block; }
+  .tm-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+  .tm-tab {
+    padding: 6px 14px; border-radius: 8px; font-size: 13px; font-weight: 500;
+    color: var(--muted); background: transparent; transition: all .15s;
+  }
+  .tm-tab.active { background: rgba(255,255,255,0.08); color: var(--text); }
+  .tm-task {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px; border-radius: 10px;
+    margin-bottom: 6px; transition: background .15s;
+  }
+  .tm-task:hover { background: rgba(255,255,255,0.04); }
+  .tm-task .subj { font-weight: 600; font-size: 14px; flex: 1; }
+  .tm-task .meta { font-size: 12px; color: var(--dim); }
+  .tm-task .status-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  }
+  .tm-task .status-dot.done { background: var(--green); }
+  .tm-task .status-dot.running { background: var(--amber); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  /* Toast */
+  .toast-container {
+    position: fixed; bottom: 20px; right: 20px; z-index: 300;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .toast {
+    padding: 10px 16px; border-radius: 10px;
+    background: rgba(30,30,34,0.95); border: 1px solid var(--border);
+    backdrop-filter: blur(12px); font-size: 13px; font-weight: 500;
+    animation: toastIn .3s ease-out;
+    display: flex; align-items: center; gap: 8px;
+  }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    .main-grid { grid-template-columns: 1fr; }
+    .left-panel { max-height: none; border-right: none; border-bottom: 1px solid var(--border); }
+    .brand-name { font-size: 1.875rem; }
+  }
+
+  /* Demo mode badge */
+  .demo-badge {
+    display: none; position: fixed; top: 14px; right: 14px;
+    padding: 6px 14px; border-radius: 20px;
+    background: rgba(255,193,7,0.15); border: 1px solid rgba(255,193,7,0.35);
+    color: var(--amber); font-size: 12px; font-weight: 600;
+    z-index: 250; letter-spacing: 0.3px;
+  }
+  .demo-badge.show { display: flex; align-items: center; gap: 6px; }
+
+  /* Dev controls */
+  .dev-panel {
+    display: none; position: fixed; bottom: 14px; left: 14px;
+    padding: 12px 16px; border-radius: 12px;
+    background: rgba(20,20,26,0.95); border: 1px solid var(--border);
+    backdrop-filter: blur(12px); z-index: 250;
+    font-size: 12px; color: var(--muted);
+  }
+  .dev-panel.show { display: flex; flex-direction: column; gap: 8px; }
+  .dev-row { display: flex; align-items: center; gap: 8px; }
+  .dev-row button {
+    padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600;
+    background: var(--bg2); color: var(--text); border: 1px solid var(--border);
+    transition: all .1s;
+  }
+  .dev-row button:hover { border-color: var(--accent); }
+  .dev-row .clock { font-family: monospace; color: var(--amber); min-width: 60px; }
+
+  /* AI activity */
+  .ai-activity {
+    display: none; margin-top: 14px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 12px 14px;
+    max-height: 180px; overflow-y: auto;
+  }
+  .ai-activity.show { display: block; }
+  .ai-activity h4 { font-size: 12px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .ai-log { font-size: 12px; color: var(--muted); font-family: monospace; line-height: 1.6; }
+  .ai-log .ts { color: var(--dim); }
+  .ai-log .ok { color: var(--green); }
+  .ai-log .info { color: var(--blue); }
+  .ai-log .warn { color: var(--amber); }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <div class="brand">
+    <span class="brand-name">ReelSync</span>
+    <span class="brand-version">v1.0.0</span>
+  </div>
+  <div class="topbar-spacer"></div>
+  <div class="topbar-actions">
+    <button class="tb-btn" onclick="toggleTM()" id="tmBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Task Manager
+    </button>
+    <button class="tb-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+      User Manual
+    </button>
+    <button class="tb-btn" onclick="toast('Settings opened','info')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
+    </button>
+    <select class="lang-sel" aria-label="Language">
+      <option>English</option>
+      <option>中文</option>
+      <option>Deutsch</option>
+      <option>Espa&ntilde;ol</option>
+      <option>Ti&#7871;ng Vi&#7879;t</option>
+    </select>
+  </div>
+</div>
+
+<!-- Task Manager Popover -->
+<div class="tm-popover" id="tmPopover">
+  <div class="tm-tabs">
+    <button class="tm-tab active">All</button>
+    <button class="tm-tab">Processing</button>
+    <button class="tm-tab">Completed</button>
+    <button class="tm-tab">Failed</button>
+  </div>
+  <div id="tmList"></div>
+</div>
+
+<!-- Main grid -->
+<div class="main-grid">
+
+  <!-- Left panel -->
+  <div class="left-panel">
+    <div class="left-card">
+      <h3>Generate &amp; Script &amp; Keywords</h3>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="agenticCheck" />
+        <label for="agenticCheck">Agentic Planning</label>
+        <span class="badge">ON</span>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Content Profile</label>
+        <select class="sel" id="contentProfile">
+          <option>Dark, unsettling historic storytelling</option>
+          <option>Fast-paced tech explainer</option>
+          <option>Warm educational narrator</option>
+        </select>
+      </div>
+
+      <button class="expander" onclick="toggleExp(this)">
+        <span class="arrow">&#9654;</span> Content Intelligence Settings
+      </button>
+      <div class="expander-body" id="ciBody"></div>
+
+      <div class="field">
+        <label class="field-label">Video Subject</label>
+        <textarea class="inp" rows="3" id="videoSubject">How zeus created the first werewolf</textarea>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Script Language</label>
+        <select class="sel" id="scriptLang">
+          <option>Auto Detect</option>
+          <option>English</option>
+          <option>Chinese</option>
+          <option>Spanish</option>
+        </select>
+      </div>
+
+      <button class="expander" onclick="toggleExp(this)">
+        <span class="arrow">&#9654;</span> Advanced Script Settings
+      </button>
+      <div class="expander-body" id="advBody"></div>
+
+      <div class="field">
+        <label class="field-label">Writing Style</label>
+        <select class="sel">
+          <option>Simple &amp; humanized (default)</option>
+          <option>Field expert / professional</option>
+          <option>Storytelling / vivid</option>
+          <option>Persuasive / motivational</option>
+          <option>Educational / clear teacher</option>
+          <option>Casual / relaxed</option>
+        </select>
+      </div>
+
+      <p class="ci-desc">Agentic planning is enabled: the strategy agents will produce the script during generation. Choose a Content Profile to steer the output.</p>
+
+      <button class="btn-gen-script" onclick="genScript()">
+        <span style="font-size:16px">&#10024;</span> Generate Script &amp; Keywords with AI
+      </button>
+
+      <div class="field">
+        <label class="field-label">Video Script</label>
+        <textarea class="inp" rows="6" id="videoScript">The ancient Greeks told of a king named Lycaon who ruled Arcadia with cruelty in his heart. One night he invited Zeus to a banquet, and served him a terrible meal made from the flesh of a sacrificed child, to test if the god truly saw all things. Zeus saw through the deception instantly. In a fury he overturned the table, the thunder shook the palace walls, and Lycaon's eyes went wide with terror as his body began to twist and crack with a new wild hunger. Zeus watched him run into the night and decreed that this curse would pass down through his bloodline creating the werewolves we hear about in stories today, so the next time you hear a howl at the moon remember it started with a king who thought he could trick the king of the gods</textarea>
+      </div>
+
+      <button class="btn-gen-script" onclick="toast('Keywords generated','ok')">
+        <span style="font-size:16px">&#10024;</span> Generate Keywords with AI
+      </button>
+
+      <div class="field">
+        <label class="field-label">Video Keywords <span style="font-weight:400;color:var(--dim)">(English, Optional)</span></label>
+        <textarea class="inp" rows="3" id="videoTerms">Zeus throne, Lycaon palace, Arcadian palace, Lycaon banquet, Zeus overturning table, Zeus thunder, Lycaon transforming, werewolf night</textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right panel -->
+  <div class="right-panel">
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="switchTab(0)">Video Settings</button>
+      <button class="tab-btn" onclick="switchTab(1)">Audio &amp; Voiceover</button>
+      <button class="tab-btn" onclick="switchTab(2)">Subtitle &amp; Output</button>
+    </div>
+
+    <div class="tab-content">
+      <!-- Tab 0: Video Settings -->
+      <div class="tab-pane active" id="tp0">
+        <div class="right-card">
+          <h3>Video Settings</h3>
+
+          <div class="field">
+            <label class="field-label">Video Source</label>
+            <select class="sel" id="videoSource" onchange="onSourceChange()">
+              <option value="auto">Auto (Best Across All Sources)</option>
+              <option value="custom">Custom API (Hybrid)</option>
+              <option value="pexels">Pexels</option>
+              <option value="pixabay">Pixabay</option>
+              <option value="coverr">Coverr</option>
+              <option value="webscrape">Web Scrape</option>
+              <option value="pollinations">Pollinations (Free)</option>
+            </select>
+          </div>
+
+          <div id="autoProvidersWrap" class="field">
+            <label class="field-label">Auto Video Sources</label>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px" id="autoProviders"></div>
+          </div>
+
+          <div class="field">
+            <label class="field-label">Material Media Type</label>
+            <select class="sel">
+              <option>Images + Videos (mixed)</option>
+              <option>Videos only</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label class="field-label">Image Motion Effect</label>
+            <select class="sel">
+              <option>Ken Burns (slow zoom-in)</option>
+              <option>Zoom In</option>
+              <option>Zoom Out</option>
+              <option>Slide In (left)</option>
+              <option>Slide In (right)</option>
+              <option>Fade</option>
+              <option>Random</option>
+            </select>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">Video Concatenation Mode</label>
+              <select class="sel">
+                <option>Sequential Concatenation</option>
+                <option>Random Concatenation (Recommended)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label">Video Aspect Ratio</label>
+              <select class="sel">
+                <option>Portrait 9:16</option>
+                <option>Landscape 16:9</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="checkbox-row">
+            <input type="checkbox" id="matchOrder" />
+            <label for="matchOrder">Match Visuals to Script Order</label>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">Video Transition Mode</label>
+              <select class="sel">
+                <option>None</option>
+                <option>Auto</option>
+                <option>Mix</option>
+                <option>Shuffle</option>
+                <option>FadeIn</option>
+                <option>FadeOut</option>
+                <option>SlideIn</option>
+                <option>SlideOut</option>
+                <option>ZoomIn</option>
+                <option>ZoomOut</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label">Maximum Clip Duration</label>
+              <select class="sel">
+                <option>Auto</option>
+                <option>2s</option><option>3s</option><option>4s</option>
+                <option>5s</option><option>6s</option><option>7s</option>
+                <option>8s</option><option>9s</option><option>10s</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">Clip Speed</label>
+              <select class="sel">
+                <option>1.00x</option><option>0.50x</option><option>0.75x</option>
+                <option>1.25x</option><option>1.50x</option><option>2.00x</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label">Videos per Run</label>
+              <select class="sel">
+                <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label">Video Encoder</label>
+            <select class="sel">
+              <option>Default (Recommended)</option>
+              <option>libx264 (CPU)</option>
+              <option>NVIDIA NVENC (h264_nvenc)</option>
+              <option>AMD AMF (h264_amf)</option>
+              <option>Intel QSV (h264_qsv)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 1: Audio & Voiceover -->
+      <div class="tab-pane" id="tp1">
+        <div class="right-card">
+          <h3>Audio &amp; Voiceover</h3>
+
+          <label class="field-label">Voiceover Mode</label>
+          <div class="seg-ctrl">
+            <button class="seg-btn active" onclick="segBtn(this)">Auto</button>
+            <button class="seg-btn" onclick="segBtn(this)">Upload</button>
+            <button class="seg-btn" onclick="segBtn(this)">None</button>
+          </div>
+
+          <div class="field">
+            <label class="field-label">Voiceover Service</label>
+            <select class="sel">
+              <option>Azure TTS V1</option>
+              <option>Azure TTS V2</option>
+              <option>SiliconFlow TTS</option>
+              <option>Google Gemini TTS</option>
+              <option>Xiaomi MiMo TTS</option>
+              <option>MiniMax TTS</option>
+              <option>ElevenLabs TTS</option>
+              <option>Chatterbox TTS</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label class="field-label">Voice <span style="font-weight:400;color:var(--dim)">(match script language)</span></label>
+            <select class="sel">
+              <option>en-US-Christopher-Male</option>
+              <option>en-US-JennyNeural-Female</option>
+              <option>en-US-GuyNeural-Male</option>
+              <option>en-US-AriaNeural-Female</option>
+            </select>
+          </div>
+
+          <div class="slider-row">
+            <div class="slider-group">
+              <label>Voiceover Volume</label>
+              <select class="sel"><option>100%</option><option>80%</option><option>120%</option><option>150%</option><option>200%</option></select>
+            </div>
+            <div class="slider-group">
+              <label>Voiceover Speed</label>
+              <select class="sel"><option>1.0x</option><option>0.8x</option><option>0.9x</option><option>1.1x</option><option>1.2x</option><option>1.5x</option><option>2.0x</option></select>
+            </div>
+          </div>
+
+          <p class="info-text">Estimated full voiceover: about 86.4&ndash;116.9 sec (local estimate, no API call)</p>
+
+          <div class="voice-preview-btns">
+            <button class="vp-btn" onclick="toast('Playing voice sample...','info')">
+              <span>&#9654;</span> Voice Sample
+            </button>
+            <button class="vp-btn" onclick="toast('Generating full preview...','info')">
+              <span>&#9776;</span> Full Preview
+            </button>
+          </div>
+
+          <hr class="section-divider" />
+
+          <div class="field">
+            <label class="field-label">Background Music Source</label>
+            <select class="sel">
+              <option>No Background Music</option>
+              <option>Random Background Music</option>
+              <option>Custom Background Music</option>
+              <option>Automatic Video-Matched Music (Sonilo AI)</option>
+              <option>Automatic Video-Matched Music (ElevenLabs AI)</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label class="field-label">Background Music Volume</label>
+            <select class="sel"><option>100%</option><option>50%</option><option>75%</option><option>0%</option></select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: Subtitle & Output -->
+      <div class="tab-pane" id="tp2">
+        <div class="right-card">
+          <h3>Subtitle &amp; Output</h3>
+
+          <div class="checkbox-row">
+            <input type="checkbox" id="subEnabled" checked />
+            <label for="subEnabled">Enable Subtitles</label>
+          </div>
+
+          <div class="field">
+            <label class="field-label">Style Preset</label>
+            <select class="sel" id="stylePreset" onchange="onPresetChange()">
+              <option value="hormozi">Hormozi / Viral Bold</option>
+              <option value="tiktok">TikTok Viral</option>
+              <option value="capcut">CapCut Clean</option>
+              <option value="cinematic">Cinematic Documentary</option>
+              <option value="minimal">Minimalist Clean</option>
+              <option value="neon">Neon Glow</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label class="field-label">Font</label>
+            <select class="sel">
+              <option>Montserrat-Bold.ttf</option>
+              <option>Arial-Bold.ttf</option>
+              <option>Impact.ttf</option>
+            </select>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">Position</label>
+              <select class="sel">
+                <option>Auto</option>
+                <option>Top</option>
+                <option>Center</option>
+                <option selected>Bottom (Recommended)</option>
+                <option>Custom</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label">Subtitle Casing</label>
+              <select class="sel">
+                <option>As Spoken</option>
+                <option>UPPERCASE (AA)</option>
+                <option>lowercase (aa)</option>
+                <option>Sentence case (Aa)</option>
+                <option>Title Case (Aa)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="sub-preview">
+            <span class="preview-text" id="subPreviewText">How <span class="hl">Zeus</span> created the first <span class="hl">werewolf</span></span>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">Font Size</label>
+              <select class="sel"><option>60</option><option>30</option><option>40</option><option>50</option><option>70</option><option>80</option><option>100</option></select>
+            </div>
+            <div class="field">
+              <label class="field-label">Color</label>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:32px;height:32px;border-radius:6px;background:#fff;border:1px solid var(--border)"></div>
+                <span style="font-size:13px;color:var(--dim)">#FFFFFF</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">Outline</label>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:32px;height:32px;border-radius:6px;background:#000;border:1px solid var(--border)"></div>
+                <span style="font-size:13px;color:var(--dim)">#000000</span>
+              </div>
+            </div>
+            <div class="field">
+              <label class="field-label">Highlight Color</label>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:32px;height:32px;border-radius:6px;background:#FFD60A;border:1px solid var(--border)"></div>
+                <span style="font-size:13px;color:var(--dim)">#FFD60A</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="checkbox-row">
+            <input type="checkbox" id="bgEnabled" />
+            <label for="bgEnabled">Background</label>
+          </div>
+
+          <hr class="section-divider" />
+
+          <h4 style="font-size:0.85rem;font-weight:600;letter-spacing:0.04em;color:var(--dim);text-transform:uppercase;margin-bottom:12px">Subtitle Animation</h4>
+
+          <div class="checkbox-row">
+            <input type="checkbox" id="animPop" />
+            <label for="animPop">Pop-in Bounce</label>
+          </div>
+          <div class="checkbox-row">
+            <input type="checkbox" id="animFloat" />
+            <label for="animFloat">Floating Motion</label>
+          </div>
+          <div class="checkbox-row">
+            <input type="checkbox" id="animHL" />
+            <label for="animHL">Highlight Active Word</label>
+          </div>
+          <div class="checkbox-row">
+            <input type="checkbox" id="animAvoid" checked />
+            <label for="animAvoid">Dynamic Auto Avoidance</label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom section -->
+    <div class="bottom-section">
+      <button class="generate-btn" id="genBtn" onclick="startGen()">Generate Video</button>
+
+      <div class="status-bar" id="statusBar">
+        <div class="status-text" id="statusText">Generating video, please wait...</div>
+        <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-pct" id="progressPct"></div>
+      </div>
+
+      <div class="ai-activity" id="aiActivity">
+        <h4>AI Activity</h4>
+        <div class="ai-log" id="aiLog"></div>
+      </div>
+
+      <div class="video-player" id="videoPlayer">
+        <div class="vp-inner" id="vpInner">
+          <div class="vp-placeholder">
+            <div class="icon">&#9654;</div>
+            <div class="label">Video will appear here</div>
+          </div>
+        </div>
+        <div class="vp-controls">
+          <button onclick="toast('Playing...','info')">&#9654;</button>
+          <span class="time">0:00 / 1:11</span>
+          <div class="spacer"></div>
+          <button onclick="toast('Downloading...','info')">&#8681;</button>
+        </div>
+        <button class="download-btn" onclick="toast('Download started','ok')">
+          &#8681; Download Video
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Demo badge -->
+<div class="demo-badge" id="demoBadge">&#9673; DEMO MODE</div>
+
+<!-- Dev controls -->
+<div class="dev-panel" id="devPanel">
+  <div class="dev-row">
+    <button id="devPause" onclick="togglePause()">&#9646;&#9646; Pause</button>
+    <button onclick="stepFwd()">&#9654; Step</button>
+    <button onclick="resetClock()">&#8635; Restart</button>
+    <span class="clock" id="clockDisplay">0:00</span>
+  </div>
+</div>
+
+<!-- Toasts -->
+<div class="toast-container" id="toasts"></div>
+
+<script>
+  var $ = function(id) { return document.getElementById(id); };
+
+  /* ======== Clock ======== */
+  var clock = { t: 0, running: false, scale: 1, startTime: 0 };
+  var REC = new URLSearchParams(window.location.search).get("record") === "1";
+  var REC_FORM = 1.4, REC_GEN = 4.0;
+
+  if (REC) {
+    clock.scale = 2;
+    $("demoBadge").classList.add("show");
+    $("devPanel").classList.remove("show");
+    document.querySelectorAll(".tb-btn, .lang-sel, .checkbox-row input, .sel, .inp, textarea, .btn-gen-script, .expander, .seg-btn, .generate-btn, .tab-btn").forEach(function(el) {
+      el.style.pointerEvents = "none";
+    });
+  } else {
+    $("devPanel").classList.add("show");
+  }
+
+  function clockTick() {
+    if (clock.running) {
+      clock.t = REC ? (performance.now() - clock.startTime) / 1000 * clock.scale : (performance.now() - clock.startTime) / 1000;
+    }
+    requestAnimationFrame(clockTick);
+  }
+  requestAnimationFrame(clockTick);
+
+  function resetClock() { clock.t = 0; clock.running = false; $("clockDisplay").textContent = "0:00"; }
+  function togglePause() {
+    clock.running = !clock.running;
+    $("devPause").textContent = clock.running ? "\u23F8 Pause" : "\u25B6 Resume";
+    toast(clock.running ? "Workflow resumed" : "Workflow paused", "info");
+  }
+  function stepFwd() { clock.t += 1; }
+
+  setInterval(function() {
+    var s = Math.floor(clock.t);
+    $("clockDisplay").textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }, 200);
+
+  /* ======== Toast ======== */
+  function toast(msg, type) {
+    var d = document.createElement("div");
+    d.className = "toast";
+    d.innerHTML = (type === "ok" ? "&#10003; " : type === "warn" ? "&#9888; " : "") + msg;
+    $("toasts").appendChild(d);
+    setTimeout(function() { d.remove(); }, 3500);
+  }
+
+  /* ======== Task Manager ======== */
+  function toggleTM() { $("tmPopover").classList.toggle("show"); }
+  var tmTasks = [
+    { subj: "How zeus created the first werewolf", status: "done", time: "2m ago" },
+    { subj: "Top 5 myths about ancient Rome", status: "done", time: "15m ago" },
+    { subj: "The science behind black holes", status: "running", time: "Now" },
+  ];
+  function renderTM() {
+    $("tmList").innerHTML = tmTasks.map(function(t) {
+      return '<div class="tm-task"><div class="status-dot ' + t.status + '"></div><div class="subj">' + t.subj + '</div><div class="meta">' + t.time + '</div></div>';
+    }).join("");
+  }
+  renderTM();
+  document.addEventListener("click", function(e) {
+    if (!e.target.closest(".tm-popover") && !e.target.closest("#tmBtn")) $("tmPopover").classList.remove("show");
+  });
+
+  /* ======== Tabs ======== */
+  function switchTab(idx) {
+    document.querySelectorAll(".tab-btn").forEach(function(b, i) { b.classList.toggle("active", i === idx); });
+    document.querySelectorAll(".tab-pane").forEach(function(p, i) { p.classList.toggle("active", i === idx); });
+  }
+
+  /* ======== Segmented control ======== */
+  function segBtn(el) {
+    el.parentElement.querySelectorAll(".seg-btn").forEach(function(b) { b.classList.remove("active"); });
+    el.classList.add("active");
+  }
+
+  /* ======== Expanders ======== */
+  function toggleExp(el) {
+    el.classList.toggle("open");
+    var body = el.nextElementSibling;
+    body.classList.toggle("open");
+  }
+
+  /* ======== Auto providers chips ======== */
+  var PROVIDERS = ["Custom API", "Pexels", "Pixabay", "Coverr", "Web Scrape", "Pollinations (Free)"];
+  function renderProviders() {
+    $("autoProviders").innerHTML = PROVIDERS.map(function(p) {
+      var on = p !== "Coverr";
+      return '<span class="chip" onclick="this.classList.toggle(\'on\')" style="cursor:pointer;padding:5px 12px;border-radius:20px;font-size:13px;font-weight:500;border:1px solid var(--border);background:' + (on ? 'rgba(255,75,75,0.1)' : 'var(--bg2)') + ';color:' + (on ? 'var(--accent)' : 'var(--muted)') + ';transition:all .15s">' + p + '</span>';
+    }).join("");
+  }
+  renderProviders();
+  function onSourceChange() {}
+
+  /* ======== Preset change ======== */
+  function onPresetChange() {
+    var p = $("stylePreset").value;
+    var text = "How Zeus created the first werewolf";
+    var preview = "How <span class='hl'>Zeus</span> created the first <span class='hl'>werewolf</span>";
+    if (p === "tiktok") preview = "HOW <span class='hl'>ZEUS</span> CREATED THE FIRST <span class='hl'>WEREWOLF</span>";
+    else if (p === "capcut") preview = "How <span class='hl'>Zeus</span> created the first <span class='hl'>werewolf</span>";
+    else if (p === "cinematic") preview = "How Zeus created the first werewolf";
+    else if (p === "minimal") preview = "How <span class='hl'>Zeus</span> created the first <span class='hl'>werewolf</span>";
+    else if (p === "neon") preview = "How <span class='hl' style='color:#0ff'>Zeus</span> created the first <span class='hl' style='color:#0ff'>werewolf</span>";
+    $("subPreviewText").innerHTML = preview;
+  }
+
+  /* ======== Script generation ======== */
+  function genScript() { toast("Script & keywords generated!", "ok"); }
+
+  /* ======== AI Activity logs ======== */
+  var LOG_LINES = [
+    { ts: 0, msg: "Analyzing niche & audience", cls: "info" },
+    { ts: 2, msg: "Researching: Zeus, Greek mythology, werewolf origin", cls: "info" },
+    { ts: 3, msg: "Strategy: dark storytelling, short-form, dramatic hook", cls: "info" },
+    { ts: 5, msg: "Script draft complete (4 paragraphs)", cls: "ok" },
+    { ts: 7, msg: "Critic review: approved, no revisions needed", cls: "ok" },
+    { ts: 9, msg: "Scene plan: 10 shots identified", cls: "info" },
+    { ts: 11, msg: "Searching materials across 3 providers...", cls: "info" },
+    { ts: 13, msg: "Downloaded 10 clips (avg 5.2s each)", cls: "ok" },
+    { ts: 15, msg: "Rendering subtitles (TikTok Viral preset)", cls: "info" },
+    { ts: 17, msg: "Compositing overlays (title + fact cards)", cls: "info" },
+    { ts: 19, msg: "Video assembly: encoding with libx264", cls: "info" },
+    { ts: 20, msg: "Final video ready (1:11, 1080x1920)", cls: "ok" },
+  ];
+
+  var genState = { phase: "idle", progress: 0 };
+
+  function addLog(t, msg, cls) {
+    var s = Math.floor(t);
+    var ts = String(Math.floor(s / 60)) + ":" + String(s % 60).padStart(2, "0");
+    $("aiLog").innerHTML += '<div><span class="ts">[' + ts + ']</span> <span class="' + cls + '">' + msg + '</span></div>';
+    $("aiActivity").scrollTop = $("aiActivity").scrollHeight;
+  }
+
+  /* ======== Generation flow ======== */
+  function startGen() {
+    if (genState.phase !== "idle") return;
+    genState.phase = "generating";
+    genState.progress = 0;
+    $("genBtn").disabled = true;
+    $("genBtn").textContent = "Generating video, please wait...";
+    $("statusBar").classList.add("show");
+    $("statusBar").classList.remove("success", "fail");
+    $("statusText").textContent = "Generating video, please wait...";
+    $("progressFill").style.width = "0%";
+    $("progressPct").textContent = "";
+    $("aiActivity").classList.add("show");
+    $("aiLog").innerHTML = "";
+    $("videoPlayer").classList.remove("show");
+
+    clock.running = true;
+    clock.startTime = performance.now();
+    clock.t = 0;
+
+    var logIdx = 0;
+    var genInterval = setInterval(function() {
+      var p = Math.min(100, genState.progress + (REC ? 8 : 3.5));
+      genState.progress = p;
+      $("progressFill").style.width = p + "%";
+      $("progressPct").textContent = Math.round(p) + "%";
+
+      while (logIdx < LOG_LINES.length && clock.t >= LOG_LINES[logIdx].ts) {
+        addLog(LOG_LINES[logIdx].ts, LOG_LINES[logIdx].msg, LOG_LINES[logIdx].cls);
+        logIdx++;
+      }
+
+      if (p >= 100) {
+        clearInterval(genInterval);
+        genState.phase = "done";
+        clock.running = false;
+        $("genBtn").disabled = false;
+        $("genBtn").textContent = "Generate Video";
+        $("statusBar").classList.add("success");
+        $("statusText").textContent = "Video Generation Completed";
+        $("progressPct").textContent = "100%";
+        $("videoPlayer").classList.add("show");
+        toast("Video Generation Completed!", "ok");
+      }
+    }, REC ? 80 : 200);
+  }
+
+  /* ======== Init ======== */
+  function init() {
+    onPresetChange();
+    clock.startTime = performance.now();
+    if (REC) {
+      setTimeout(function() { clock.running = true; }, 100);
+    }
+  }
+  init();
+</script>
+</body>
+</html>

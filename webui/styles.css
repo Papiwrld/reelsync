@@ -1,0 +1,720 @@
+/* Main UI Redesign & Tab Styling */
+div[data-testid="stTabs"] {
+    background: rgba(25, 27, 31, 0.5);
+    border-radius: 12px;
+    padding: 10px 15px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+div[data-testid="stTabs"] button[data-baseweb="tab"] {
+    font-size: 1.1rem !important;
+    font-weight: 600 !important;
+    padding: 10px 15px;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+}
+div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+/* Primary Generate Button Animation */
+div[class*="st-key-generate_video_button"] button {
+    border-radius: 12px;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+div[class*="st-key-generate_video_button"] button:hover {
+    transform: scale(1.02);
+    box-shadow: 0 4px 15px rgba(255, 75, 75, 0.3);
+}
+
+header[data-testid="stHeader"],
+div[data-testid="stToolbar"],
+div[data-testid="stDecoration"],
+div[data-testid="stStatusWidget"],
+div[data-testid="stSkillsNudgeAnchor"],
+div[data-testid="stSkillsNudge"] {
+    display: none !important;
+}
+
+div[data-testid="stMainBlockContainer"] {
+    padding-top: 0.5rem !important;
+}
+
+h1 {
+    padding-top: 0 !important;
+    margin-top: 0 !important;
+}
+
+/* Streamlit 默认让标签中的帮助区域占据剩余宽度，导致问号按钮贴到控件最右侧。
+   帮助提示在语义上从属于标签文字，因此取消该区域的伸展，并用固定小间距让
+   问号紧跟标签；没有 help 参数的标签不存在这个 div，不会受到影响。 */
+label[data-testid="stWidgetLabel"] > div {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    margin-left: 0.35rem !important;
+}
+
+/* 配音方式位于四列布局中的窄面板。Streamlit 的 stretch 模式默认让单个分段
+   按钮接近半行宽，三个选项会换成两行；这里仅对该控件改为三等分，并压缩
+   水平内边距，保持其它 segmented control 的原生尺寸不变。 */
+div[class*="st-key-voice_mode_control"] [role="radiogroup"] {
+    flex-wrap: nowrap !important;
+}
+
+div[class*="st-key-voice_mode_control"] [role="radiogroup"] > button {
+    flex: 1 1 0 !important;
+    width: auto !important;
+    min-width: 0 !important;
+    padding: 0.25rem !important;
+}
+
+div[class*="st-key-voice_mode_control"] [role="radiogroup"] > button p {
+    overflow: hidden !important;
+    font-size: 0.8rem !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+}
+
+/* 顶部品牌区将项目名和弱化版本号放在同一基线。项目名称仍是页面唯一的 h1；
+   版本号本身作为项目链接，避免增加独立图标而干扰标题的视觉层级。 */
+.mpt-brand {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    color: inherit;
+    line-height: 1.15;
+}
+
+/* Streamlit 会在自定义 h1 内增加一层文本容器，实际的行内布局需要作用在
+   这层容器上，才能稳定控制项目名和版本号的间距。 */
+.mpt-brand > span:first-child {
+    display: flex;
+    align-items: baseline;
+    gap: 0.65rem;
+    min-width: 0;
+}
+
+.mpt-brand__name {
+    min-width: 0;
+    font-size: 2.75rem;
+    font-weight: 700;
+    letter-spacing: 0;
+    white-space: nowrap;
+}
+
+.mpt-brand__version {
+    flex: 0 0 auto;
+    font-size: 1rem;
+    font-weight: 600;
+    color: inherit !important;
+    opacity: 0.72;
+    text-decoration: none !important;
+    white-space: nowrap;
+}
+
+.mpt-brand__version:hover {
+    color: inherit !important;
+    opacity: 1;
+    text-decoration: underline !important;
+    text-underline-offset: 0.18em;
+}
+
+.mpt-brand__version:focus-visible {
+    outline: 2px solid rgba(255, 75, 75, 0.48);
+    outline-offset: 2px;
+}
+
+/* Streamlit 会自动给 h1 追加一个标题锚点。品牌区已有版本号项目链接，额外的
+   标题锚点没有实际价值，因此只在这个标题内隐藏，避免窄屏出现多余图标。 */
+.mpt-brand > [data-testid="stHeaderActionElements"] {
+    display: none !important;
+}
+
+/* 顶部任务入口由 st.fragment 定时刷新，Streamlit 会为 Fragment 自动生成一个
+   占满整行的 LayoutWrapper。这里只收缩该包装层，保证右侧操作区按内容紧凑排列。 */
+.st-key-top_bar_actions
+    > div[data-testid="stLayoutWrapper"]:first-child {
+    flex: 0 0 auto !important;
+    width: fit-content !important;
+}
+
+/* 顶部操作区（任务管理、语言选择、设置）必须共享同一垂直中线。Streamlit 的
+   horizontal container 虽然声明了 vertical_alignment="center"，但 fragment
+   包装层和下拉框的隐藏标签都会引入额外高度；这里强制所有子项沿中线居中，
+   并禁止 flex 换行，保证三个控件始终在同一行、按内容紧凑排列。 */
+.st-key-top_bar_actions [data-testid="stHorizontalBlock"] {
+    align-items: center !important;
+    flex-wrap: nowrap !important;
+    justify-content: flex-end !important;
+}
+
+.st-key-top_bar_actions [data-testid="stLayoutWrapper"] {
+    display: flex !important;
+    align-items: center !important;
+}
+
+.st-key-top_bar_actions [data-testid="stVerticalBlock"] {
+    display: flex !important;
+    align-items: center !important;
+}
+
+/* 任务管理 popover 与语言下拉框统一为按钮同高，避免任一控件突出破坏对齐。 */
+.st-key-top_bar_actions button[kind="secondary"],
+.st-key-top_bar_actions [data-testid="stSelectbox"]
+    [data-baseweb="select"] {
+    min-height: 2.25rem !important;
+}
+
+/* 极窄窗口下允许语言下拉框等比收缩（配合 nowrap 不换行），
+   避免控件被挤出操作区。 */
+.st-key-top_bar_actions [data-testid="stElementContainer"].st-key-top_language_code_selector {
+    flex: 0 1 auto !important;
+    min-width: 0 !important;
+}
+
+.st-key-top_bar_actions [data-testid="stWidgetLabel"] {
+    display: none !important;
+}
+
+@media (max-width: 700px) {
+    .mpt-brand > span:first-child {
+        gap: 0.45rem;
+    }
+
+    .mpt-brand__name {
+        font-size: 1.875rem;
+    }
+
+    .mpt-brand__version {
+        font-size: 0.875rem;
+    }
+
+}
+
+@media (max-width: 480px) {
+    .mpt-brand > span:first-child {
+        gap: 0.35rem;
+    }
+
+    .mpt-brand__name {
+        font-size: 1.5rem;
+    }
+
+    .mpt-brand__version {
+        font-size: 0.75rem;
+    }
+
+}
+
+/* 高级设置属于内容展开入口，不是执行操作。保留 Streamlit 原生 expander 的
+   语义和键盘交互，只在带 advanced_settings_ key 的局部容器内移除卡片边框，
+   避免与紧邻的 AI 生成按钮形成两个连续大按钮的视觉干扰。 */
+div[class*="st-key-advanced_settings_"] details {
+    border: 0 !important;
+    border-radius: 4px !important;
+    background: transparent !important;
+}
+
+div[class*="st-key-advanced_settings_"] details > summary {
+    min-height: 2.25rem !important;
+    padding: 0.35rem 0.25rem !important;
+    color: inherit !important;
+    opacity: 0.78;
+}
+
+div[class*="st-key-advanced_settings_"] details > summary:hover {
+    opacity: 1;
+    background: color-mix(
+        in srgb,
+        currentColor 6%,
+        transparent
+    ) !important;
+}
+
+/* 展开后让标题和内容共享同一背景，视觉上形成连续区域；折叠状态仍保持原有的
+   透明轻量入口，不额外占用页面层级。 */
+div[class*="st-key-advanced_settings_"] details[open] > summary {
+    border-radius: 4px 4px 0 0 !important;
+    opacity: 1;
+    background: color-mix(
+        in srgb,
+        currentColor 5%,
+        transparent
+    ) !important;
+}
+
+div[class*="st-key-advanced_settings_"] details > summary:focus {
+    background: color-mix(
+        in srgb,
+        currentColor 5%,
+        transparent
+    ) !important;
+    box-shadow: none !important;
+    outline: none !important;
+}
+
+/* 键盘操作使用标题下划线作为焦点反馈，不再绘制任何外框，确保展开区域在视觉
+   上完全无边框，同时仍能让键盘用户识别当前焦点。 */
+div[class*="st-key-advanced_settings_"] details > summary:focus-visible {
+    box-shadow: none !important;
+}
+
+div[class*="st-key-advanced_settings_"] details > summary:focus-visible p {
+    text-decoration: underline !important;
+    text-underline-offset: 0.18em;
+}
+
+div[class*="st-key-advanced_settings_"] details > summary p {
+    font-size: 0.9rem !important;
+    font-weight: 500 !important;
+}
+
+/* 内容区与展开标题无缝衔接，不使用任何边框，仅通过统一背景和内边距表达
+   控件从属于高级设置，避免出现嵌套卡片或割裂的两段式结构。 */
+div[class*="st-key-advanced_settings_"] div[data-testid="stExpanderDetails"] {
+    margin-top: 0 !important;
+    padding: 0.75rem 0.75rem 0.85rem 1rem !important;
+    border: 0 !important;
+    border-radius: 0 0 4px 4px !important;
+    background: color-mix(
+        in srgb,
+        currentColor 5%,
+        transparent
+    ) !important;
+}
+
+/* 任务管理 popover 需要固定宽度，避免内容从空状态、列表状态切换时
+   反复改变宽度造成页面抖动。宽度仍保留视口约束，兼容窄屏。 */
+div[data-testid="stPopoverBody"] {
+    width: min(860px, calc(100vw - 48px)) !important;
+    max-width: min(860px, calc(100vw - 48px)) !important;
+}
+
+div[data-testid="stPopoverBody"] div[data-testid="stVerticalBlock"] {
+    width: 100% !important;
+}
+
+/* 任务管理列表保留 Streamlit 原生布局，只做轻量压缩，避免每一行过高。
+   通过 task_row_ key 限定作用范围，避免影响其它配置面板的 container。 */
+div[class*="st-key-task_row_"] {
+    margin-bottom: 0.18rem !important;
+}
+
+div[class*="st-key-task_row_"] div[data-testid="stVerticalBlockBorderWrapper"] {
+    padding: 0.18rem 0.6rem !important;
+}
+
+div[class*="st-key-task_row_"] div[data-testid="stElementContainer"],
+div[class*="st-key-task_row_"] div[data-testid="stMarkdown"] {
+    margin-bottom: 0 !important;
+}
+
+div[class*="st-key-task_row_"] div[data-testid="stMarkdown"] {
+    display: flex !important;
+    align-items: center !important;
+    min-height: 1.75rem !important;
+}
+
+div[class*="st-key-task_row_"] div[data-testid="stMarkdownContainer"] {
+    display: flex !important;
+    align-items: center !important;
+    margin-bottom: 0 !important;
+}
+
+div[class*="st-key-task_row_"] p {
+    margin-bottom: 0 !important;
+    line-height: 1.25 !important;
+}
+
+div[class*="st-key-task_row_"] button[kind="secondary"] {
+    position: relative !important;
+    min-height: 1.75rem !important;
+    height: 1.75rem !important;
+    padding: 0.1rem 0.3rem !important;
+}
+
+/* 按钮文字视觉隐藏后，Streamlit 仍会保留图标与文字之间的默认间距，导致
+   单独图标向左偏移。清除该间距并让内容层占满按钮，确保操作图标严格居中。 */
+div[class*="st-key-task_row_"]
+    button[kind="secondary"]
+    span[data-has-shortcut] {
+    width: 100% !important;
+    gap: 0 !important;
+    justify-content: center !important;
+}
+
+/* 行内操作保留可访问的按钮名称，但视觉上只显示图标。使用屏幕阅读器可见的
+   隐藏方式，而不是 display:none，确保每个操作仍能被正确朗读。 */
+div[class*="st-key-task_row_"] button[kind="secondary"] p {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    clip-path: inset(50%) !important;
+    white-space: nowrap !important;
+}
+
+
+/* 中等宽度下将四个设置面板调整为 2×2，避免每列过窄导致标签和按钮频繁换行。 */
+@media (min-width: 701px) and (max-width: 1100px) {
+    .mpt-brand__name {
+        font-size: 2.25rem;
+    }
+
+    .mpt-brand__version {
+        font-size: 0.875rem;
+    }
+
+    div[class*="st-key-main_settings_grid"]
+        > div[data-testid="stLayoutWrapper"]
+        > div[data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+        gap: 1rem !important;
+    }
+
+    div[class*="st-key-main_settings_grid"]
+        > div[data-testid="stLayoutWrapper"]
+        > div[data-testid="stHorizontalBlock"]
+        > div[data-testid="stColumn"] {
+        flex: 1 1 calc(50% - 0.5rem) !important;
+        width: calc(50% - 0.5rem) !important;
+        min-width: calc(50% - 0.5rem) !important;
+    }
+}
+
+/* 移动端隐藏桌面表头，并将任务行重排为“主题 + 元信息 + 操作”紧凑结构。 */
+@media (max-width: 700px) {
+    div[class*="st-key-task_table_header_"] {
+        display: none !important;
+    }
+
+    div[class*="st-key-task_row_"]
+        > div[data-testid="stLayoutWrapper"]
+        > div[data-testid="stHorizontalBlock"] {
+        display: grid !important;
+        grid-template-columns: auto minmax(0, 1fr) auto auto;
+        gap: 0.2rem 0.5rem !important;
+        align-items: center !important;
+    }
+
+    div[class*="st-key-task_row_"]
+        > div[data-testid="stLayoutWrapper"]
+        > div[data-testid="stHorizontalBlock"]
+        > div[data-testid="stColumn"] {
+        width: auto !important;
+        min-width: 0 !important;
+    }
+
+    div[class*="st-key-task_row_"]
+        > div[data-testid="stLayoutWrapper"]
+        > div[data-testid="stHorizontalBlock"]
+        > div[data-testid="stColumn"]:nth-child(1) {
+        grid-column: 1;
+        grid-row: 2;
+    }
+
+    div[class*="st-key-task_row_"]
+        > div[data-testid="stLayoutWrapper"]
+        > div[data-testid="stHorizontalBlock"]
+        > div[data-testid="stColumn"]:nth-child(2) {
+        grid-column: 2;
+        grid-row: 2;
+    }
+
+    div[class*="st-key-task_row_"]
+        > div[data-testid="stLayoutWrapper"]
+        > div[data-testid="stHorizontalBlock"]
+        > div[data-testid="stColumn"]:nth-child(3) {
+        grid-column: 1 / 4;
+        grid-row: 1;
+        font-weight: 600;
+    }
+
+    div[class*="st-key-task_row_"]
+        > div[data-testid="stLayoutWrapper"]
+        > div[data-testid="stHorizontalBlock"]
+        > div[data-testid="stColumn"]:nth-child(4) {
+        grid-column: 3;
+        grid-row: 2;
+    }
+
+    div[class*="st-key-task_row_"]
+        > div[data-testid="stLayoutWrapper"]
+        > div[data-testid="stHorizontalBlock"]
+        > div[data-testid="stColumn"]:nth-child(5) {
+        grid-column: 4;
+        grid-row: 1 / 3;
+    }
+
+    div[class*="st-key-task_row_"]
+        > div[data-testid="stLayoutWrapper"]
+        > div[data-testid="stHorizontalBlock"]
+        > div[data-testid="stColumn"]:nth-child(5)
+        div[data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        flex-direction: row !important;
+        gap: 0.15rem !important;
+    }
+
+    div[class*="st-key-task_row_"]
+        > div[data-testid="stLayoutWrapper"]
+        > div[data-testid="stHorizontalBlock"]
+        > div[data-testid="stColumn"]:nth-child(5)
+        div[data-testid="stColumn"] {
+        flex: 1 1 0 !important;
+        width: auto !important;
+        min-width: 1.75rem !important;
+    }
+}
+
+/* ==========================================================================
+   UI 重设计：深色主题下的圆角、柔和边框与悬停动效
+   ========================================================================== */
+
+/* 按钮统一圆角 12px，并加入轻微上浮 + 阴影的悬停过渡。 */
+.stButton > button {
+    border-radius: 12px !important;
+    transition:
+        transform 0.15s ease,
+        box-shadow 0.15s ease,
+        background-color 0.15s ease,
+        border-color 0.15s ease !important;
+}
+
+.stButton > button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.stButton > button:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* 主设置面板：去掉生硬边框，改用 16px 圆角 + 柔和底色 + 细边框。
+   只作用于 main_settings_grid 内的面板，避免影响任务行等其它容器。 */
+div[class*="st-key-main_settings_grid"]
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+    border-radius: 16px !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    background: #1c1c24 !important;
+}
+
+/* 文本输入、文本域、下拉框统一 10px 圆角。 */
+div[data-baseweb="input"] > div,
+div[data-baseweb="select"] > div,
+div[data-baseweb="textarea"] > div,
+[data-testid="stTextArea"] textarea {
+    border-radius: 10px !important;
+}
+
+/* 输入控件悬停时提亮边框，保持可点击感的反馈。 */
+div[data-baseweb="input"]:hover > div,
+div[data-baseweb="select"]:hover > div,
+div[data-baseweb="textarea"]:hover > div {
+    border-color: rgba(255, 75, 75, 0.45) !important;
+}
+
+/* “Generate Video” 主行动按钮：醒目的红色渐变 + 加大内边距 + 药丸形。
+   Streamlit 1.59 会把元素 key 放到按钮外层容器的 class 上，这里同时兼容
+   key 直接落在 button 自身的情况。 */
+div[class*="st-key-generate_video_button"] > button,
+button[class*="st-key-generate_video_button"] {
+    border-radius: 16px !important;
+    min-height: 3rem !important;
+    padding: 0.75rem 1.5rem !important;
+    font-size: 1.05rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.02em;
+    background: linear-gradient(135deg, #ff5a5a 0%, #e03131 100%) !important;
+    border: 0 !important;
+    color: #ffffff !important;
+    box-shadow: 0 6px 20px rgba(224, 49, 49, 0.35);
+    transition:
+        transform 0.15s ease,
+        box-shadow 0.15s ease,
+        filter 0.15s ease !important;
+}
+
+div[class*="st-key-generate_video_button"] > button:hover,
+button[class*="st-key-generate_video_button"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 28px rgba(224, 49, 49, 0.45);
+    filter: brightness(1.06);
+}
+
+div[class*="st-key-generate_video_button"] > button:active,
+button[class*="st-key-generate_video_button"]:active {
+    transform: translateY(0);
+    box-shadow: 0 4px 12px rgba(224, 49, 49, 0.35);
+}
+
+/* 生成按钮的悬停反馈在暗色主题下也保持可读的焦点环。 */
+div[class*="st-key-generate_video_button"] > button:focus-visible,
+button[class*="st-key-generate_video_button"]:focus-visible {
+    outline: 2px solid rgba(255, 90, 90, 0.7);
+    outline-offset: 2px;
+}
+
+/* Dashboard Task Manager Card Redesign */
+.mpt-task-card,
+.mpt-action-play,
+.mpt-action-folder,
+.mpt-action-retry,
+.mpt-action-delete {
+    display: none;
+}
+
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.mpt-task-card) {
+    border-radius: 16px !important;
+    transition: all 0.3s ease;
+    border: 1px solid rgba(128, 128, 128, 0.15) !important;
+    background: linear-gradient(145deg, rgba(255,255,255,0.03), rgba(255,255,255,0));
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.02);
+}
+
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.mpt-task-card):hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+    border-color: #ff4b4b !important;
+    background: linear-gradient(145deg, rgba(255,75,75,0.05), rgba(255,75,75,0.01));
+}
+
+/* Task action buttons — circular icon-only buttons using Streamlit's native
+   Material icons (no external icon-font dependency). */
+.mpt-action-play + div[data-testid="stButton"] button,
+.mpt-action-folder + div[data-testid="stButton"] button,
+.mpt-action-retry + div[data-testid="stButton"] button,
+.mpt-action-delete + div[data-testid="stButton"] button {
+    border-radius: 50% !important;
+    width: 36px !important;
+    height: 36px !important;
+    min-height: 36px !important;
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    transition: all 0.2s;
+}
+
+.mpt-action-play + div[data-testid="stButton"] button {
+    color: #4CAF50 !important;
+}
+.mpt-action-folder + div[data-testid="stButton"] button {
+    color: #2196F3 !important;
+}
+.mpt-action-retry + div[data-testid="stButton"] button {
+    color: #FF9800 !important;
+}
+.mpt-action-delete + div[data-testid="stButton"] button {
+    color: #F44336 !important;
+}
+
+.mpt-action-play + div[data-testid="stButton"] button:hover,
+.mpt-action-folder + div[data-testid="stButton"] button:hover,
+.mpt-action-retry + div[data-testid="stButton"] button:hover,
+.mpt-action-delete + div[data-testid="stButton"] button:hover {
+    background: rgba(128, 128, 128, 0.1) !important;
+    transform: scale(1.05);
+}
+
+/* Disabled state */
+.mpt-action-play + div[data-testid="stButton"] button:disabled,
+.mpt-action-folder + div[data-testid="stButton"] button:disabled,
+.mpt-action-retry + div[data-testid="stButton"] button:disabled,
+.mpt-action-delete + div[data-testid="stButton"] button:disabled {
+    opacity: 0.4;
+    filter: grayscale(100%);
+}
+
+
+/* --- UI POLISH OVERRIDES --- */
+
+/* Task Manager Popover Button Polish */
+div.st-key-task_manager_entry > div > button {
+    border-radius: 20px !important;
+    background: linear-gradient(135deg, rgba(255, 90, 90, 0.1), rgba(255, 120, 120, 0.05)) !important;
+    border: 1px solid rgba(255, 90, 90, 0.3) !important;
+    color: #ff5a5a !important;
+    font-weight: 600 !important;
+    transition: all 0.3s ease !important;
+    padding: 0.3rem 1rem !important;
+}
+
+div.st-key-task_manager_entry > div > button:hover {
+    background: rgba(255, 90, 90, 0.15) !important;
+    border-color: rgba(255, 90, 90, 0.6) !important;
+    box-shadow: 0 4px 12px rgba(224, 49, 49, 0.2) !important;
+    transform: translateY(-1px) !important;
+}
+
+/* Task Manager Popover Body Polish */
+div[data-testid="stPopoverBody"] {
+    width: min(860px, calc(100vw - 48px)) !important;
+    max-width: min(860px, calc(100vw - 48px)) !important;
+    border-radius: 16px !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    background: rgba(30, 30, 34, 0.85) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4) !important;
+    padding: 1.5rem !important;
+}
+
+div[data-testid="stPopoverBody"] div[data-testid="stVerticalBlock"] {
+    width: 100% !important;
+}
+
+/* Remove old grey borders and padding from Streamlit's inner border wrapper */
+div[class*="st-key-task_row_"] div[data-testid="stVerticalBlockBorderWrapper"] {
+    padding: 0.8rem 1rem !important;
+    border-radius: 12px !important;
+    border: 1px solid rgba(255,255,255,0.05) !important;
+    background: rgba(255,255,255,0.02) !important;
+    transition: background 0.2s ease, border-color 0.2s !important;
+    margin-bottom: 0.5rem !important;
+}
+
+div[class*="st-key-task_row_"] div[data-testid="stVerticalBlockBorderWrapper"]:hover {
+    background: rgba(255,255,255,0.05) !important;
+    border-color: rgba(255,255,255,0.1) !important;
+}
+
+/* Content Intelligence 设置的分组标题：小号大写、弱化颜色，并用细线分隔分组。
+   折叠区域内按“策略 / 受众与语气 / 研究”分层，避免所有控件一字排开的拥挤感。 */
+.mpt-ci-section {
+    margin: 0.55rem 0 0.2rem 0;
+    padding-top: 0.4rem;
+    border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, currentColor 60%, transparent);
+}
+
+
+
+/* 运行中的操作按钮：明显灰化并降低不透明度，配合 Streamlit 原生 disabled
+   语义，让用户一眼看出“正在执行，请勿重复点击”。所有通过 _action_button_clicked
+   守卫的长操作按钮（生成、导入、发现选题、连接测试等）都会应用这一状态。 */
+div[data-testid="stButton"] > button:disabled,
+div[data-testid="stFormSubmitButton"] > button:disabled,
+div[data-testid="stButton"] > button[kind="secondary"]:disabled {
+    opacity: 0.45 !important;
+    filter: grayscale(0.9) !important;
+    cursor: not-allowed !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+/* 主生成按钮禁用时同样灰化，且不保留 primary 的视觉强调，避免误导用户
+   以为可以再次点击。 */
+div[data-testid="stButton"] > button[kind="primary"]:disabled {
+    opacity: 0.4 !important;
+    filter: grayscale(1) !important;
+    cursor: not-allowed !important;
+}
