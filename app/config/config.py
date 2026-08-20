@@ -11,6 +11,7 @@ import toml
 from loguru import logger
 
 from app import __version__
+from app.utils.secrets import get_secret
 
 root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 config_file = f"{root_dir}/config.toml"
@@ -463,7 +464,6 @@ def load_config():
 def _apply_env_overrides(config: dict):
     """Apply environment variable overrides to config. Env vars take precedence over TOML."""
     # App section
-    app = config.get("app", {})
     env_mapping = {
         "PEXELS_API_KEY": ("app", "pexels_api_keys"),
         "PIXABAY_API_KEY": ("app", "pixabay_api_keys"),
@@ -557,7 +557,7 @@ def _apply_env_overrides(config: dict):
         "CUSTOM_API_IMAGE_MODEL": ("app", "custom_api_image_model"),
     }
     for env_var, (section, key) in env_mapping.items():
-        value = os.getenv(env_var)
+        value = get_secret(env_var)
         if value is not None:
             # Handle list-type configs (comma-separated)
             if key.endswith("_keys") or key == "upload_post_platforms" or key == "auto_providers":
@@ -571,46 +571,46 @@ def _apply_env_overrides(config: dict):
 
     # Azure section
     azure = config.get("azure", {})
-    if os.getenv("AZURE_SPEECH_KEY"):
-        azure["speech_key"] = os.getenv("AZURE_SPEECH_KEY")
-    if os.getenv("AZURE_SPEECH_REGION"):
-        azure["speech_region"] = os.getenv("AZURE_SPEECH_REGION")
+    if get_secret("AZURE_SPEECH_KEY"):
+        azure["speech_key"] = get_secret("AZURE_SPEECH_KEY")
+    if get_secret("AZURE_SPEECH_REGION"):
+        azure["speech_region"] = get_secret("AZURE_SPEECH_REGION")
     config["azure"] = azure
 
     # SiliconFlow section
     siliconflow = config.get("siliconflow", {})
-    if os.getenv("SILICONFLOW_API_KEY"):
-        siliconflow["api_key"] = os.getenv("SILICONFLOW_API_KEY")
+    if get_secret("SILICONFLOW_API_KEY"):
+        siliconflow["api_key"] = get_secret("SILICONFLOW_API_KEY")
     config["siliconflow"] = siliconflow
 
     # Minimax TTS section
     minimax_tts = config.get("minimax_tts", {})
-    if os.getenv("MINIMAX_TTS_API_KEY"):
-        minimax_tts["api_key"] = os.getenv("MINIMAX_TTS_API_KEY")
-    if os.getenv("MINIMAX_TTS_BASE_URL"):
-        minimax_tts["base_url"] = os.getenv("MINIMAX_TTS_BASE_URL")
-    if os.getenv("MINIMAX_TTS_MODEL_ID"):
-        minimax_tts["model_id"] = os.getenv("MINIMAX_TTS_MODEL_ID")
-    if os.getenv("MINIMAX_TTS_VOICE_ID"):
-        minimax_tts["voice_id"] = os.getenv("MINIMAX_TTS_VOICE_ID")
+    if get_secret("MINIMAX_TTS_API_KEY"):
+        minimax_tts["api_key"] = get_secret("MINIMAX_TTS_API_KEY")
+    if get_secret("MINIMAX_TTS_BASE_URL"):
+        minimax_tts["base_url"] = get_secret("MINIMAX_TTS_BASE_URL")
+    if get_secret("MINIMAX_TTS_MODEL_ID"):
+        minimax_tts["model_id"] = get_secret("MINIMAX_TTS_MODEL_ID")
+    if get_secret("MINIMAX_TTS_VOICE_ID"):
+        minimax_tts["voice_id"] = get_secret("MINIMAX_TTS_VOICE_ID")
     config["minimax_tts"] = minimax_tts
 
     # ElevenLabs section
     elevenlabs = config.get("elevenlabs", {})
-    if os.getenv("ELEVENLABS_API_KEY"):
-        elevenlabs["api_key"] = os.getenv("ELEVENLABS_API_KEY")
-    if os.getenv("ELEVENLABS_MODEL_ID"):
-        elevenlabs["model_id"] = os.getenv("ELEVENLABS_MODEL_ID")
+    if get_secret("ELEVENLABS_API_KEY"):
+        elevenlabs["api_key"] = get_secret("ELEVENLABS_API_KEY")
+    if get_secret("ELEVENLABS_MODEL_ID"):
+        elevenlabs["model_id"] = get_secret("ELEVENLABS_MODEL_ID")
     config["elevenlabs"] = elevenlabs
 
     # Chatterbox section
     chatterbox = config.get("chatterbox", {})
-    if os.getenv("CHATTERBOX_BASE_URL"):
-        chatterbox["base_url"] = os.getenv("CHATTERBOX_BASE_URL")
-    if os.getenv("CHATTERBOX_API_KEY"):
-        chatterbox["api_key"] = os.getenv("CHATTERBOX_API_KEY")
-    if os.getenv("CHATTERBOX_MODEL_ID"):
-        chatterbox["model_id"] = os.getenv("CHATTERBOX_MODEL_ID")
+    if get_secret("CHATTERBOX_BASE_URL"):
+        chatterbox["base_url"] = get_secret("CHATTERBOX_BASE_URL")
+    if get_secret("CHATTERBOX_API_KEY"):
+        chatterbox["api_key"] = get_secret("CHATTERBOX_API_KEY")
+    if get_secret("CHATTERBOX_MODEL_ID"):
+        chatterbox["model_id"] = get_secret("CHATTERBOX_MODEL_ID")
     config["chatterbox"] = chatterbox
 
     # Research section
@@ -635,7 +635,7 @@ def _apply_env_overrides(config: dict):
         "ENABLE_SPARQL": "enable_sparql",
     }
     for env_var, key in research_env_mapping.items():
-        value = os.getenv(env_var)
+        value = get_secret(env_var)
         if value is not None:
             if key in ("zero_key_enabled", "cache_enabled", "deduplication_enabled", "batching_enabled", "nominatim_enabled", "enable_sparql"):
                 research[key] = value.lower() in ("true", "1", "yes", "on")
