@@ -468,6 +468,96 @@ class TestConfigPersistence:
                     config.app[key] = original_value
 
 
+class TestTaskConfigSnapshot:
+    @staticmethod
+    def _wait_for_deferred_flush(timeout=1):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with config._pending_config_lock:
+                if not config._pending_config_flush_scheduled:
+                    return
+            time.sleep(0.005)
+        raise AssertionError("deferred config flush did not finish")
+
+    def test_snapshot_config_for_task_returns_expected_sections(self):
+        """任务快照应包含所有流水线会读取的配置分区，且是深拷贝。"""
+        snapshot = config.snapshot_config_for_task()
+        assert set(snapshot) == {
+            "app",
+            "azure",
+            "siliconflow",
+            "minimax_tts",
+            "elevenlabs",
+            "chatterbox",
+            "ui",
+            "agentic",
+            "research",
+        }
+        assert snapshot["app"] == dict(config.app)
+        assert snapshot["app"] is not config.app
+        assert snapshot["azure"] == dict(config.azure)
+        assert snapshot["research"] == dict(config.research)
+        snapshot["app"]["snapshot_probe"] = "isolated"
+        assert config.app.get("snapshot_probe") is None
+
+    def test_snapshot_config_for_task_flushes_pending_updates(self):
+        """任务开始时必须应用 WebUI 排队值，让快照包含用户的最新选择。"""
+        key = "snapshot_flush_test"
+        original_value = config.app.get(key, config._MISSING)
+        updates_finished = threading.Event()
+
+        def queue_update():
+            assert not config.update_config_nonblocking(config.app, key, "latest")
+            updates_finished.set()
+
+        try:
+            with patch.object(config, "save_config"):
+                with config.runtime_config_lock():
+                    worker = threading.Thread(target=queue_update)
+                    worker.start()
+                    assert updates_finished.wait(timeout=0.2)
+
+                    snapshot = config.snapshot_config_for_task()
+                    # 快照前会应用并保存待处理更新，因此全局配置与快照都包含新值。
+                    assert snapshot["app"][key] == "latest"
+                    assert config.app.get(key) == "latest"
+
+                worker.join(timeout=1)
+
+            self._wait_for_deferred_flush()
+        finally:
+            if original_value is config._MISSING:
+                config.app.pop(key, None)
+            else:
+                config.app[key] = original_value
+
+    def test_task_config_overlay_is_thread_local_and_restores(self):
+        """overlay 只影响当前线程，任务结束（或异常路径）后恢复读取全局配置。"""
+        key = "llm_provider"
+        original_value = config.app.get(key, config._MISSING)
+        snapshot = config.snapshot_config_for_task()
+        snapshot["app"][key] = "snapshot-provider"
+        observed = {}
+
+        def read_in_other_thread():
+            observed["value"] = config.app.get(key)
+
+        try:
+            config.begin_task_config(snapshot)
+            assert config.app.get(key) == "snapshot-provider"
+            assert config.app[key] == "snapshot-provider"
+            assert config.app.get("missing_overlay_key", "fallback") == "fallback"
+            assert config.app.get("llm_provider") == "snapshot-provider"
+
+            worker = threading.Thread(target=read_in_other_thread)
+            worker.start()
+            worker.join(timeout=1)
+            assert observed["value"] == original_value
+        finally:
+            config.end_task_config()
+            assert config.app.get(key) == original_value
+
+
 class TestSecretSourcing:
     @staticmethod
     def _secret_only(values: dict):

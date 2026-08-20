@@ -1553,16 +1553,21 @@ def start(
 ):
     """执行任务流水线，并确保未预期异常也会转换成可查询的失败状态。"""
     try:
-        # API 任务没有 WebUI 的 runtime_config_lock 包装。这里在流水线全程持锁，
-        # 保证同一任务不会中途切换 Provider、密钥等进程级配置；WebUI 已持锁时
-        # 嵌套获取由线程局部深度计数放行，不会重复刷新待应用配置。
-        with config.runtime_config_lock():
+        # 任务不再在整个流水线期间持有 runtime_config_lock，否则并发任务会
+        # 在这把进程级锁上串行等待。改为在任务开始时短暂持锁，深拷贝一份配置
+        # 快照后立即释放，再通过线程局部 overlay 让整条流水线读取这份一致的
+        # 配置。WebUI 仍可在任务期间非阻塞地更新全局配置，且不影响当前任务。
+        snapshot = config.snapshot_config_for_task()
+        config.begin_task_config(snapshot)
+        try:
             return _run_pipeline(
                 task_id,
                 params,
                 stop_at=stop_at,
                 voice_preview=voice_preview,
             )
+        finally:
+            config.end_task_config()
     except Exception as exc:
         logger.exception(
             f"unexpected task pipeline failure, task_id: {task_id}, error: {exc}"

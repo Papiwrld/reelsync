@@ -19,6 +19,7 @@ _CONTAINER_CGROUP_MARKERS = ("docker", "containerd", "kubepods", "libpod", "podm
 _DOCKER_HOST_GATEWAY_NAME = "host.docker.internal"
 _config_save_lock = threading.RLock()
 _runtime_config_depth = threading.local()
+_runtime_config_overlay = threading.local()
 _pending_config_lock = threading.RLock()
 _pending_config_updates = {}
 _pending_config_save_requested = False
@@ -53,6 +54,34 @@ def _strip_secret_sourced_keys(config_to_save: dict):
 
 class _SynchronizedConfig(dict):
     """保持 dict 使用方式不变，同时让运行期配置写操作服从同一把锁。"""
+
+    def __init__(self, *args, section_name=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._section_name = section_name
+
+    def __getitem__(self, key):
+        overlay = getattr(_runtime_config_overlay, "sections", None)
+        if (
+            overlay is not None
+            and self._section_name
+            and self._section_name in overlay
+        ):
+            section = overlay[self._section_name]
+            if key in section:
+                return section[key]
+        return dict.__getitem__(self, key)
+
+    def get(self, key, default=None):
+        overlay = getattr(_runtime_config_overlay, "sections", None)
+        if (
+            overlay is not None
+            and self._section_name
+            and self._section_name in overlay
+        ):
+            section = overlay[self._section_name]
+            if key in section:
+                return section[key]
+        return dict.get(self, key, default)
 
     def __setitem__(self, key, value):
         # Streamlit 每次整页 rerun 都会把当前控件值重新写回配置。视频任务持有
@@ -209,6 +238,43 @@ def snapshot_config_with_pending(config_section):
             else:
                 snapshot[key] = copy.deepcopy(value)
     return snapshot
+
+
+def snapshot_config_for_task() -> dict:
+    """
+    在短锁下取全部分区的深拷贝，供单个任务在整条流水线期间使用。
+
+    视频生成不再在整个流水线期间持有 ``runtime_config_lock``，改为在任务开始
+    时短暂获取锁、应用并保存待处理的 WebUI 更新，然后一次性深拷贝所有配置分区
+    并立即释放。后续流水线通过线程局部 overlay 读取这份快照，从而允许多个任务
+    并发执行，同时保证每个任务使用的 Provider、密钥等配置前后一致。
+    """
+    with _config_save_lock:
+        _flush_pending_config_locked(suppress_save_errors=True)
+        return {
+            "app": copy.deepcopy(dict(app)),
+            "azure": copy.deepcopy(dict(azure)),
+            "siliconflow": copy.deepcopy(dict(siliconflow)),
+            "minimax_tts": copy.deepcopy(dict(minimax_tts)),
+            "elevenlabs": copy.deepcopy(dict(elevenlabs)),
+            "chatterbox": copy.deepcopy(dict(chatterbox)),
+            "ui": copy.deepcopy(dict(ui)),
+            "agentic": copy.deepcopy(dict(agentic)),
+            "research": copy.deepcopy(dict(research)),
+        }
+
+
+def begin_task_config(snapshot: dict):
+    """为当前线程的流水线安装配置快照 overlay。"""
+    _runtime_config_overlay.sections = snapshot
+
+
+def end_task_config():
+    """移除当前线程的配置快照 overlay，恢复读取全局配置。"""
+    try:
+        del _runtime_config_overlay.sections
+    except AttributeError:
+        pass
 
 
 def _flush_pending_config_locked(*, suppress_save_errors):
@@ -754,21 +820,30 @@ def save_config():
 
 
 _cfg = load_config()
-app = _SynchronizedConfig(_cfg.get("app", {}))
+app = _SynchronizedConfig(_cfg.get("app", {}), section_name="app")
 whisper = _cfg.get("whisper", {})
 proxy = _cfg.get("proxy", {})
-azure = _SynchronizedConfig(_cfg.get("azure", {}))
-siliconflow = _SynchronizedConfig(_cfg.get("siliconflow", {}))
-minimax_tts = _SynchronizedConfig(_cfg.get("minimax_tts", {}))
-elevenlabs = _SynchronizedConfig(_cfg.get("elevenlabs", {}))
-chatterbox = _SynchronizedConfig(_cfg.get("chatterbox", {}))
+azure = _SynchronizedConfig(_cfg.get("azure", {}), section_name="azure")
+siliconflow = _SynchronizedConfig(
+    _cfg.get("siliconflow", {}), section_name="siliconflow"
+)
+minimax_tts = _SynchronizedConfig(
+    _cfg.get("minimax_tts", {}), section_name="minimax_tts"
+)
+elevenlabs = _SynchronizedConfig(
+    _cfg.get("elevenlabs", {}), section_name="elevenlabs"
+)
+chatterbox = _SynchronizedConfig(
+    _cfg.get("chatterbox", {}), section_name="chatterbox"
+)
 ui = _SynchronizedConfig(
     _cfg.get(
         "ui",
         {
             "hide_log": False,
         },
-    )
+    ),
+    section_name="ui",
 )
 agentic = _SynchronizedConfig(
     _cfg.get(
@@ -776,7 +851,8 @@ agentic = _SynchronizedConfig(
         {
             "max_script_revisions": 2,
         },
-    )
+    ),
+    section_name="agentic",
 )
 research = _SynchronizedConfig(
     _cfg.get(
@@ -802,7 +878,8 @@ research = _SynchronizedConfig(
             "nominatim_enabled": True,
             "enable_sparql": False,
         },
-    )
+    ),
+    section_name="research",
 )
 
 hostname = socket.gethostname()

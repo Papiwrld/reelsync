@@ -38,6 +38,11 @@ class ScriptReviserAgent(BaseAgent):
 
         research_block = research_grounding_context(research)
 
+        scores_block = "\n".join(
+            f"- {dim.replace('_', ' ').title()}: {review.scores.get(dim, 0)}/10"
+            for dim in ["hook", "niche_alignment", "narrative", "visual_potential", "pacing", "ending", "cta_quality"]
+        )
+
         return f"""
 # Role: Script Editor
 
@@ -49,7 +54,10 @@ hook (verbatim) and the same angle. Do not change the topic.
 
 ## Critic feedback
 Overall: {review.overall}/10
-{review.feedback or 'Improve the weakest scored dimensions.'}
+Dimension scores:
+{scores_block}
+
+Critic notes: {review.feedback or 'Improve the weakest scored dimensions first.'}
 
 ## Previous script
 \"\"\"{script}\"\"\"
@@ -68,7 +76,7 @@ Overall: {review.overall}/10
 ## Hard constraints
 1. Return only the raw narration text — no markdown, no titles.
 2. No speaker labels, no emojis, no mention of this prompt.
-3. Fix the specific issues in the feedback; keep what already works.
+3. Fix the specific issues in the feedback; keep what already works. Focus improvements on the lowest-scoring dimensions first.
 4. Never use dashes, hyphens or bullet markers in the script: join related clauses with commas instead.
 5. Target length: {_target_length_hint(target_duration_seconds, profile.preferred_video_length)}.
 """.rstrip()
