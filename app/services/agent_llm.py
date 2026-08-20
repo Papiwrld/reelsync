@@ -15,6 +15,7 @@ Design rules (shared with the agent graph):
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Callable, Dict, Optional
 
 from loguru import logger
@@ -107,6 +108,10 @@ def _llm_text(prompt: str, app_config=None, tracker: Optional[AgentTracker] = No
             if tracker:
                 tracker.mark_degraded(f"{type(exc).__name__}: {exc}")
             logger.warning(f"agentic llm call failed (attempt {attempt + 1}): {exc}")
+            # 指数退避 + 抖动，避免 429/限流时连发 3 次请求烧配额。
+            # 最后一次尝试后不需要再等待。
+            if attempt < _AGENT_LLM_RETRIES - 1:
+                time.sleep(llm._backoff_delay(attempt))
     if tracker and agent:
         tracker.set_failed(agent, f"llm failed after {_AGENT_LLM_RETRIES} attempts", _AGENT_LLM_RETRIES)
     # 带上底层供应商错误（如 429 额度不足、401 Key 无效、网络超时），

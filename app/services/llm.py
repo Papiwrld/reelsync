@@ -1,7 +1,8 @@
 import json
 import logging
+import random
 import re
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import List
 
 from loguru import logger
@@ -19,6 +20,10 @@ _max_retries = 3
 # 单次 LLM 请求的硬超时。上游 SDK 默认超时长达 600s，配合 5 次重试时一个
 # 挂起的服务商能让任务阻塞约 50 分钟；显式超时把最坏情况收敛到 5 分钟内。
 _LLM_REQUEST_TIMEOUT_SECONDS = 60
+# 指数退避的基线与上限。重试前的等待按 1s、2s、4s 递增（加上抖动），
+# 让 429/限流场景在重试间隙给供应商留出恢复时间，而不是连发 3 次请求。
+_BACKOFF_BASE_SECONDS = 1.0
+_BACKOFF_MAX_SECONDS = 8.0
 MIN_SCRIPT_PARAGRAPH_NUMBER = 1
 MAX_SCRIPT_PARAGRAPH_NUMBER = 10
 MAX_SCRIPT_PROMPT_LENGTH = 2000
@@ -32,6 +37,22 @@ _SENSITIVE_QUERY_RE = re.compile(
     r"([?&](?:api[_-]?key|access[_-]?token|token|key|secret|password)=)([^&#\s]+)",
     re.IGNORECASE,
 )
+
+
+def _backoff_delay(
+    attempt: int,
+    base_seconds: float = _BACKOFF_BASE_SECONDS,
+    max_seconds: float = _BACKOFF_MAX_SECONDS,
+) -> float:
+    """Jittered exponential backoff delay in seconds for a given retry attempt.
+
+    ``delay = min(base * (2 ** attempt), max)`` then jittered to
+    ``[0.5, 1.5] * delay`` so retrying clients don't thundering-herd a
+    recovering provider. Uses ``random`` (not ``secrets``) because this is a
+    performance optimization, not security.
+    """
+    delay = min(base_seconds * (2**attempt), max_seconds)
+    return min(delay * random.uniform(0.5, 1.5), max_seconds)
 
 # 文案措辞风格预设。每个条目是一段注入提示词的写作风格指令；默认值
 # simple_humanized 面向普通观众，用简单、口语化、人性化的语言。
@@ -710,6 +731,7 @@ def generate_script(
             logger.error(f"failed to generate script: {e}")
 
         if i < _max_retries:
+            sleep(_backoff_delay(i))
             logger.warning(f"failed to generate video script, trying again... {i + 1}")
     if "Error: " in final_script:
         logger.error(f"failed to generate video script: {final_script}")
@@ -838,6 +860,7 @@ Please note that you must use English for generating video search terms; Chinese
         if search_terms and len(search_terms) > 0:
             break
         if i < _max_retries:
+            sleep(_backoff_delay(i))
             logger.warning(f"failed to generate video terms, trying again... {i + 1}")
 
     logger.success(f"completed: \n{search_terms}")
@@ -1098,6 +1121,7 @@ def generate_social_metadata(
             logger.warning(f"failed to parse social metadata: {str(e)}")
 
         if i < _max_retries - 1:
+            sleep(_backoff_delay(i))
             logger.warning(
                 f"failed to generate social metadata, trying again... {i + 1}"
             )

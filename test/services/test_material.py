@@ -787,13 +787,17 @@ class TestMaterialTlsVerification(unittest.TestCase):
                 match_script_order=True,
             )
 
+        # 并发下载下 save_video 的调用顺序由线程调度决定，不保证与提交顺序
+        # 一致；但下载集合必须精确是 a1/b1/a2，b2 不能因并发窗口被多下。
         self.assertEqual(
-            downloaded_urls,
-            [
-                "https://v.example/a1.mp4",
-                "https://v.example/b1.mp4",
-                "https://v.example/a2.mp4",
-            ],
+            sorted(downloaded_urls),
+            sorted(
+                [
+                    "https://v.example/a1.mp4",
+                    "https://v.example/b1.mp4",
+                    "https://v.example/a2.mp4",
+                ]
+            ),
         )
         self.assertEqual(result, ["/tmp/a1.mp4", "/tmp/b1.mp4", "/tmp/a2.mp4"])
         recorded_sources = patch_script.call_args.kwargs["material_sources"]

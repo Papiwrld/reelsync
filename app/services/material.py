@@ -3,6 +3,7 @@ import random
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Tuple
 from urllib.parse import urlencode, urlsplit
@@ -29,6 +30,11 @@ _api_key_lock = threading.Lock()
 # 会与 ffmpeg/moviepy 渲染争抢资源；这里固定收敛到 3，任务时间线只取决于
 # 最慢的供应商，多余并发只带来内存压力（G：低端设备自适应）。
 _AUTO_SEARCH_MAX_WORKERS = 3
+
+# 素材下载并发度。下载是网络 IO + 磁盘写，串行会让 8+ 关键词的片段逐个累加
+# 10-60s 延迟；3 个 worker 能显著压缩等待，同时避免与 ffmpeg/moviepy 渲染
+# 争抢资源（G：低端设备自适应，与 _AUTO_SEARCH_MAX_WORKERS 同量级）。
+MAX_DOWNLOAD_WORKERS = 3
 
 # 素材搜索/下载是网络 IO，瞬时的 DNS、连接重置或供应商 5xx/限流不应让整个
 # 片段静默缺素材。这里做有限次指数退避重试：失败成本低，重试能显著提高
@@ -619,7 +625,9 @@ def save_video(video_url: str, save_dir: str = "") -> str:
         save_dir = utils.storage_dir("cache_videos")
 
     if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+        # 并发下载时多个线程可能同时通过存在性检查；exist_ok 让先建目录的
+        # 线程赢，其它线程静默复用，避免 FileExistsError 误伤一次下载。
+        os.makedirs(save_dir, exist_ok=True)
 
     url_without_query = video_url.split("?")[0]
     url_hash = utils.md5(url_without_query)
@@ -1234,6 +1242,156 @@ def _is_image_material(item: MaterialInfo) -> bool:
     return source.get("media_type") == "image"
 
 
+def _download_material_item(
+    item: MaterialInfo,
+    material_directory: str,
+    *,
+    search_term: str | None = None,
+) -> str:
+    """在工作线程内下载单个素材：只做网络 IO 与磁盘写入，返回本地路径，失败返回空串。
+
+    ``search_term`` 仅用于保留脚本顺序路径的日志上下文；调用方统一处理两个
+    下载循环的其它文案差异。
+    """
+    source_info = item.source_info if isinstance(item.source_info, dict) else {}
+    if search_term is not None:
+        logger.info(
+            f"downloading ordered {item.provider} video for {search_term!r}: "
+            f"asset_id={source_info.get('asset_id') or 'unknown'}"
+        )
+    else:
+        logger.info(
+            f"downloading {item.provider} video: "
+            f"asset_id={source_info.get('asset_id') or 'unknown'}"
+        )
+    if item.provider == "web_scrape":
+        import hashlib
+        from app.services import web_scrape as _web_scrape_svc
+
+        # Generate unique filename for the scraped video
+        file_name = f"web_scrape_{hashlib.md5(item.url.encode()).hexdigest()}.mp4"
+        saved_video_path = os.path.join(material_directory, file_name)
+        success = _web_scrape_svc.download_web_video(item.url, saved_video_path)
+        # yt-dlp 返回成功不代表容器完好，重新用 VideoFileClip 探测，损坏文件在
+        # 下载阶段就按失败处理，避免最终渲染时整条任务炸掉。
+        return _validate_scraped_video(saved_video_path) if success else ""
+    return save_video(video_url=item.url, save_dir=material_directory)
+
+
+def _concurrent_prefix_len(
+    tasks, max_clip_duration: int, audio_duration: float
+) -> int:
+    """返回无论单个下载成败与否都必须先处理的前置片段数。
+
+    串行循环在累计时长第一次超过 ``audio_duration`` 时才停止；此前所有片段都
+    必然会被下载，可以放心并发。一旦超出该前缀，是否继续取决于前面结果的
+    实际时长，必须回到顺序下载，否则会多下素材、改变返回集合。
+    """
+    total = 0.0
+    for index, (item, _) in enumerate(tasks):
+        total += min(max_clip_duration, item.duration)
+        if total > audio_duration:
+            return index
+    return len(tasks)
+
+
+def _download_with_concurrent_prefix(
+    tasks,
+    material_directory: str,
+    max_clip_duration: int,
+    audio_duration: float,
+    video_paths: List[str],
+    material_sources: List[dict[str, Any]],
+) -> float:
+    """有界并发下载 ``tasks``（``(item, search_term_or_None)``，顺序即串行处理顺序）。
+
+    - 必下前缀：一次性提交给 ``MAX_DOWNLOAD_WORKERS`` 个 worker，结果按提交
+      顺序处理，``video_paths`` 与 ``material_sources`` 顺序和串行实现完全一致。
+    - 顺序尾部：逐个下载，保证"总时长超了就停"的判定与串行实现一致（前缀里
+      若有片段下载失败，实际累计时长更低，尾部会继续补足，行为不变）。
+    - 错误隔离：单个片段抛异常只记日志，不影响其它片段；返回集合不变。
+    返回最终累计时长（调用方不再使用）。
+    """
+    total_duration = 0.0
+    prefix_len = _concurrent_prefix_len(tasks, max_clip_duration, audio_duration)
+
+    def record_success(item, saved_video_path, search_term) -> None:
+        nonlocal total_duration
+        if saved_video_path:
+            logger.info(f"video saved: {saved_video_path}")
+            video_paths.append(saved_video_path)
+            try:
+                material_sources.append(
+                    _material_source_record(item, saved_video_path)
+                )
+            except Exception as source_error:
+                # 来源记录异常不能把已经成功下载的素材视为下载失败，更不能
+                # 阻断视频生成；保留供应商和异常类型用于后续定位。
+                log_key = "ordered " if search_term is not None else ""
+                logger.warning(
+                    f"failed to prepare {log_key}material source record: "
+                    f"provider={item.provider}, "
+                    f"error={type(source_error).__name__}, detail={source_error}"
+                )
+            total_duration += min(max_clip_duration, item.duration)
+
+    def log_failure(item, search_term, error) -> None:
+        log_key = "ordered " if search_term is not None else ""
+        logger.error(
+            f"failed to download {log_key}material video: "
+            f"provider={item.provider}, error={type(error).__name__}, "
+            f"detail={_redact_request_error(error, item.url)}"
+        )
+
+    if prefix_len:
+        prefix_tasks = tasks[:prefix_len]
+        with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
+            futures = {
+                pool.submit(
+                    _download_material_item,
+                    item,
+                    material_directory,
+                    search_term=search_term,
+                ): index
+                for index, (item, search_term) in enumerate(prefix_tasks)
+            }
+            outcomes: dict[int, tuple[str | None, Exception | None]] = {}
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    outcomes[index] = (future.result(), None)
+                except Exception as exc:  # noqa: BLE001 - 下载线程异常逐条隔离
+                    outcomes[index] = (None, exc)
+        for index, (item, search_term) in enumerate(prefix_tasks):
+            saved_video_path, error = outcomes[index]
+            if error is not None:
+                log_failure(item, search_term, error)
+                continue
+            record_success(item, saved_video_path, search_term)
+            if total_duration > audio_duration:
+                logger.info(
+                    f"total duration of downloaded videos: {total_duration} seconds, skip downloading more"
+                )
+                return total_duration
+
+    # 前缀可能因部分失败而不足；剩余候选保持原有顺序逐个下载。
+    for item, search_term in tasks[prefix_len:]:
+        try:
+            saved_video_path = _download_material_item(
+                item, material_directory, search_term=search_term
+            )
+        except Exception as e:
+            log_failure(item, search_term, e)
+            continue
+        record_success(item, saved_video_path, search_term)
+        if total_duration > audio_duration:
+            logger.info(
+                f"total duration of downloaded videos: {total_duration} seconds, skip downloading more"
+            )
+            break
+    return total_duration
+
+
 def download_videos(
     task_id: str,
     search_terms: List[str],
@@ -1362,61 +1520,14 @@ def download_videos(
     if concat_mode_value == VideoConcatMode.random.value:
         random.shuffle(valid_video_items)
 
-    total_duration = 0.0
-    for item in valid_video_items:
-        try:
-            source_info = item.source_info if isinstance(item.source_info, dict) else {}
-            logger.info(
-                f"downloading {item.provider} video: "
-                f"asset_id={source_info.get('asset_id') or 'unknown'}"
-            )
-            if item.provider == "web_scrape":
-                import hashlib
-                from app.services import web_scrape as _web_scrape_svc
-
-                # Generate unique filename for the scraped video
-                file_name = (
-                    f"web_scrape_{hashlib.md5(item.url.encode()).hexdigest()}.mp4"
-                )
-                saved_video_path = os.path.join(material_directory, file_name)
-                success = _web_scrape_svc.download_web_video(item.url, saved_video_path)
-                # yt-dlp 返回成功不代表容器完好，重新用 VideoFileClip 探测，
-                # 损坏文件在下载阶段就按失败处理，避免最终渲染时整条任务炸掉。
-                saved_video_path = (
-                    _validate_scraped_video(saved_video_path) if success else ""
-                )
-            else:
-                saved_video_path = save_video(
-                    video_url=item.url, save_dir=material_directory
-                )
-            if saved_video_path:
-                logger.info(f"video saved: {saved_video_path}")
-                video_paths.append(saved_video_path)
-                try:
-                    material_sources.append(
-                        _material_source_record(item, saved_video_path)
-                    )
-                except Exception as source_error:
-                    # 来源记录异常不能把已经成功下载的素材视为下载失败，更不能
-                    # 阻断视频生成；保留供应商和异常类型用于后续定位。
-                    logger.warning(
-                        "failed to prepare material source record: "
-                        f"provider={item.provider}, "
-                        f"error={type(source_error).__name__}, detail={source_error}"
-                    )
-                seconds = min(max_clip_duration, item.duration)
-                total_duration += seconds
-                if total_duration > audio_duration:
-                    logger.info(
-                        f"total duration of downloaded videos: {total_duration} seconds, skip downloading more"
-                    )
-                    break
-        except Exception as e:
-            logger.error(
-                "failed to download material video: "
-                f"provider={item.provider}, error={type(e).__name__}, "
-                f"detail={_redact_request_error(e, item.url)}"
-            )
+    _download_with_concurrent_prefix(
+        tasks=[(item, None) for item in valid_video_items],
+        material_directory=material_directory,
+        max_clip_duration=max_clip_duration,
+        audio_duration=audio_duration,
+        video_paths=video_paths,
+        material_sources=material_sources,
+    )
     logger.success(f"downloaded {len(video_paths)} videos")
     _persist_material_sources(task_id, material_sources)
     return video_paths
@@ -1473,74 +1584,26 @@ def _download_videos_by_script_order(
 
     video_paths = []
     material_sources: list[dict[str, Any]] = []
-    total_duration = 0.0
-    candidate_index = 0
-    while candidate_groups and total_duration <= audio_duration:
-        has_candidate = False
+
+    # 与串行循环完全相同的轮询顺序：第 1 轮取每个关键词的第 1 个候选，第 2 轮
+    # 取第 2 个候选……展开成有序任务表后交给并发下载，返回顺序保持一致。
+    ordered_tasks = []
+    max_group_size = (
+        max(len(items) for _, items in candidate_groups) if candidate_groups else 0
+    )
+    for candidate_index in range(max_group_size):
         for search_term, term_items in candidate_groups:
-            if candidate_index >= len(term_items):
-                continue
+            if candidate_index < len(term_items):
+                ordered_tasks.append((term_items[candidate_index], search_term))
 
-            has_candidate = True
-            item = term_items[candidate_index]
-            try:
-                source_info = (
-                    item.source_info if isinstance(item.source_info, dict) else {}
-                )
-                logger.info(
-                    f"downloading ordered {item.provider} video for {search_term!r}: "
-                    f"asset_id={source_info.get('asset_id') or 'unknown'}"
-                )
-                if item.provider == "web_scrape":
-                    import hashlib
-                    from app.services import web_scrape as _web_scrape_svc
-
-                    file_name = (
-                        f"web_scrape_{hashlib.md5(item.url.encode()).hexdigest()}.mp4"
-                    )
-                    saved_video_path = os.path.join(material_directory, file_name)
-                    success = _web_scrape_svc.download_web_video(
-                        item.url, saved_video_path
-                    )
-                    # 与默认下载路径一致：探测容器，损坏文件按下载失败处理。
-                    saved_video_path = (
-                        _validate_scraped_video(saved_video_path) if success else ""
-                    )
-                else:
-                    saved_video_path = save_video(
-                        video_url=item.url, save_dir=material_directory
-                    )
-                if saved_video_path:
-                    logger.info(f"video saved: {saved_video_path}")
-                    video_paths.append(saved_video_path)
-                    try:
-                        material_sources.append(
-                            _material_source_record(item, saved_video_path)
-                        )
-                    except Exception as source_error:
-                        logger.warning(
-                            "failed to prepare ordered material source record: "
-                            f"provider={item.provider}, "
-                            f"error={type(source_error).__name__}, "
-                            f"detail={source_error}"
-                        )
-                    total_duration += min(max_clip_duration, item.duration)
-                    if total_duration > audio_duration:
-                        logger.info(
-                            f"total duration of downloaded videos: {total_duration} seconds, skip downloading more"
-                        )
-                        break
-            except Exception as e:
-                logger.error(
-                    "failed to download ordered material video: "
-                    f"provider={item.provider}, error={type(e).__name__}, "
-                    f"detail={_redact_request_error(e, item.url)}"
-                )
-
-        if not has_candidate:
-            break
-        candidate_index += 1
-
+    _download_with_concurrent_prefix(
+        tasks=ordered_tasks,
+        material_directory=material_directory,
+        max_clip_duration=max_clip_duration,
+        audio_duration=audio_duration,
+        video_paths=video_paths,
+        material_sources=material_sources,
+    )
     logger.success(f"downloaded {len(video_paths)} ordered videos")
     _persist_material_sources(task_id, material_sources)
     return video_paths

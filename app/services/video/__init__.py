@@ -364,11 +364,11 @@ def _sanitize_image_file(image_path: str) -> str:
     sanitized_path = f"{image_root}.sanitized.png"
 
     with Image.open(image_path) as image:
-        image.load()
         # 统一导出为 PNG，避免 JPEG/PNG 不同元数据路径继续把坏块带过去。
-        cleaned_image = Image.new(image.mode, image.size)
-        cleaned_image.putdata(list(image.getdata()))
-        cleaned_image.save(sanitized_path)
+        # 直接走 PIL 原生解码→编码路径并显式剥离 EXIF，避免
+        # Image.new + putdata(list(image.getdata()))：那会为每个像素构造
+        # Python 元组/列表，4K 图片（约 830 万像素）可瞬时占用数百 MB 内存。
+        image.save(sanitized_path, exif=b"")
 
     return sanitized_path
 

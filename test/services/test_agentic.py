@@ -120,6 +120,26 @@ class TestGenerationState(unittest.TestCase):
 
 
 class TestLlvmJsonHelpers(unittest.TestCase):
+    def test_backoff_delay_increases_with_attempts(self):
+        with patch.object(agentic.llm.random, "uniform", return_value=1.0):
+            delays = [agentic.llm._backoff_delay(i) for i in range(4)]
+        self.assertEqual(delays, [1.0, 2.0, 4.0, 8.0])
+        for index in range(1, len(delays)):
+            self.assertGreaterEqual(delays[index], delays[index - 1])
+
+    def test_backoff_delay_bounded_by_max(self):
+        for attempt in range(10):
+            delay = agentic.llm._backoff_delay(attempt)
+            self.assertLessEqual(delay, 8.0)
+
+    def test_backoff_delay_jittered_around_base(self):
+        delays = [agentic.llm._backoff_delay(0) for _ in range(20)]
+        # base 1.0s jittered to [0.5, 1.5): values must vary, not be constant.
+        self.assertGreater(len(set(delays)), 1)
+        for delay in delays:
+            self.assertGreaterEqual(delay, 0.5)
+            self.assertLessEqual(delay, 1.5)
+
     def test_extract_json_payload_strips_code_fence(self):
         raw = '```json\n{"a": 1}\n```'
         self.assertEqual(agentic._extract_json_payload(raw), {"a": 1})
