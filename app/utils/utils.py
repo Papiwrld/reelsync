@@ -115,6 +115,65 @@ def task_dir(sub_dir: str = ""):
     return d
 
 
+def resolve_custom_output_dir(raw_path: str = "") -> str | None:
+    """Validate and resolve a user-supplied output directory.
+
+    Returns an absolute path if the directory exists or can be created,
+    otherwise None.  Relative paths are resolved against the project root
+    to avoid surprises when the process cwd changes.
+    """
+    cleaned = (raw_path or "").strip().strip('"').strip("'")
+    if not cleaned:
+        return None
+    # Expand user/home and env vars for convenience (e.g. ~/Videos)
+    cleaned = os.path.expandvars(os.path.expanduser(cleaned))
+    # Relative paths → project root, absolute paths kept as-is
+    if not os.path.isabs(cleaned):
+        cleaned = os.path.join(root_dir(), cleaned)
+    cleaned = os.path.normpath(cleaned)
+    # Block obvious dangerous targets (Windows system / Unix root)
+    lowered = cleaned.lower().replace("\\", "/")
+    if lowered in ("/", "c:/", "c:/windows", "c:/windows/system32"):
+        return None
+    try:
+        os.makedirs(cleaned, exist_ok=True)
+    except (OSError, ValueError):
+        return None
+    # Verify we can actually write there
+    if not os.path.isdir(cleaned) or not os.access(cleaned, os.W_OK):
+        return None
+    return cleaned
+
+
+def copy_final_to_custom_output(final_paths: list[str], custom_dir: str) -> list[str]:
+    """Copy final videos to *custom_dir* with task-id prefix.
+
+    Returns the list of copied destination paths. Failures are logged and
+    skipped so the original task still succeeds even if the custom dir
+    becomes unavailable mid-copy.
+    """
+    resolved = resolve_custom_output_dir(custom_dir)
+    if not resolved or not final_paths:
+        return []
+    copied: list[str] = []
+    for src in final_paths:
+        try:
+            if not os.path.isfile(src):
+                continue
+            dst = os.path.join(resolved, os.path.basename(src))
+            # Avoid overwriting an existing file from a previous task with
+            # the same basename (e.g. final-1.mp4) — prefix with parent
+            # task id when collision detected.
+            if os.path.exists(dst):
+                parent = os.path.basename(os.path.dirname(src))
+                dst = os.path.join(resolved, f"{parent}-{os.path.basename(src)}")
+            shutil.copy2(src, dst)
+            copied.append(dst)
+        except Exception as exc:
+            logger.warning(f"failed to copy final video to custom output: {src} -> {resolved}: {exc}")
+    return copied
+
+
 def font_dir(sub_dir: str = ""):
     d = resource_dir("fonts")
     if sub_dir:

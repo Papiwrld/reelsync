@@ -3999,6 +3999,36 @@ def _render_video_settings(panel, params):
                 _delete_runtime_config("app", "video_codec")
             else:
                 _set_runtime_config("app", "video_codec", selected_video_codec)
+
+            with st.expander("Advanced Output Settings", expanded=False):
+                saved_output_dir = config.app.get("output_dir", "") or ""
+                new_output_dir = st.text_input(
+                    "Custom Output Folder",
+                    value=saved_output_dir,
+                    key="output_dir_input",
+                    help="Absolute or ~/ path. Empty = default storage/tasks/<task_id>/. Final videos are copied there with task-id prefix.",
+                    placeholder="e.g. D:/Videos/MyProject or ~/Videos",
+                )
+                # 与 video_codec 相同的非阻塞保存逻辑：空值表示删除配置项
+                if new_output_dir.strip() != saved_output_dir.strip():
+                    if new_output_dir.strip() == "":
+                        _delete_runtime_config("app", "output_dir")
+                    else:
+                        _set_runtime_config("app", "output_dir", new_output_dir.strip())
+                if new_output_dir.strip() and not utils.resolve_custom_output_dir(new_output_dir.strip()):
+                    st.warning("Custom output folder is not writable or not allowed")
+                # 覆盖 VideoParams 的 per-request 输出目录，让本次生成立即生效
+                params.output_dir = new_output_dir.strip()
+
+                saved_keep = bool(config.app.get("keep_intermediate_clips", False))
+                new_keep = st.checkbox(
+                    "Keep Intermediate Clips (temp-clip / mix-chunk)",
+                    value=saved_keep,
+                    key="keep_intermediate_clips_checkbox",
+                    help="When enabled, intermediate processed clips are kept in the task folder for debugging. Default deletes them to save space.",
+                )
+                if new_keep != saved_keep:
+                    _set_runtime_config("app", "keep_intermediate_clips", new_keep)
     return uploaded_files
 
 

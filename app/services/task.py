@@ -1522,6 +1522,27 @@ def _run_pipeline(
         f"task {task_id} finished, generated {len(final_video_paths)} videos."
     )
 
+    # 6.5 复制成片到用户自定义目录（若配置）。原始任务目录始终保留，
+    # WebUI/API 继续从 tasks/<id>/ 提供预览与下载；自定义目录仅为
+    # 额外副本，失败不影响任务状态。
+    custom_output_dir = ""
+    try:
+        # API 每请求优先，WebUI/默认走全局配置
+        param_output = getattr(params, "output_dir", "") or ""
+        cfg_output = config.app.get("output_dir", "") or ""
+        custom_output_dir = (param_output.strip() if param_output.strip() else cfg_output.strip())
+    except Exception:
+        custom_output_dir = ""
+    output_copies: list[str] | None = None
+    if custom_output_dir:
+        try:
+            copied = utils.copy_final_to_custom_output(final_video_paths, custom_output_dir)
+            if copied:
+                logger.info(f"copied {len(copied)} final videos to custom output: {custom_output_dir}")
+                output_copies = copied
+        except Exception as exc:
+            logger.warning(f"failed to copy to custom output_dir {custom_output_dir}: {exc}")
+
     # 7. 先完成视频生成任务，再按需提交跨平台发布。第三方上传可能耗时
     # 数分钟，不应阻塞视频结果返回，也不能反向影响已经生成的成片。
     cross_post_enabled = (
@@ -1552,6 +1573,8 @@ def _run_pipeline(
         "cross_post_error": None,
         "cross_post_owner": _cross_post_process_owner if should_cross_post else None,
         "warnings": generation_warnings or None,
+        "output_dir": custom_output_dir or None,
+        "output_copies": output_copies,
     }
     sm.state.update_task(
         task_id, state=const.TASK_STATE_COMPLETE, progress=100, **kwargs

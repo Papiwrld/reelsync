@@ -1241,13 +1241,16 @@ def combine_videos(
         # 任何合并/编码异常都先清理中间分块文件与素材临时文件，避免失败任务
         # 留下 mix-chunk-*.mp4 与 temp-clip-*.mp4 垃圾；clip 句柄由
         # _mix_concat_group 的 finally 统一释放。异常继续上抛给调用方。
-        delete_files(intermediate_files)
-        delete_files(clip_files)
+        # keep_intermediate_clips=true 时保留现场以便排查编码失败原因。
+        if not config.app.get("keep_intermediate_clips"):
+            delete_files(intermediate_files)
+            delete_files(clip_files)
         raise
 
-    # clean temp files
-    delete_files(intermediate_files)
-    delete_files(clip_files)
+    # clean temp files (final + combined 始终保留；仅删除过程片段)
+    if not config.app.get("keep_intermediate_clips"):
+        delete_files(intermediate_files)
+        delete_files(clip_files)
 
     if transition_times:
         try:

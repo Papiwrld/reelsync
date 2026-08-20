@@ -226,6 +226,17 @@ def create_task(
     stop_at: str,
 ):
     request_id = base.get_task_id(request)
+    # Validate custom output_dir early (only TaskVideoRequest has it)
+    raw_output = getattr(body, "output_dir", "") or ""
+    if raw_output.strip():
+        from app.utils import utils as _utils
+
+        if not _utils.resolve_custom_output_dir(raw_output):
+            raise HttpException(
+                task_id=request_id,
+                status_code=400,
+                message=f"{request_id}: output_dir is not writable or not allowed: {raw_output}",
+            )
     idempotency_key = (
         request.headers.get("X-Idempotency-Key")
         or request.headers.get("x-idempotency-key")

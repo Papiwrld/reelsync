@@ -294,6 +294,10 @@ class VideoParams(BaseModel):
     subtitle_active_word_highlight: bool = False
     subtitle_dynamic_auto_avoidance: bool = True
 
+    # 自定义成片输出目录（API 每请求覆盖 config.app.output_dir）。
+    # 空值表示仅使用默认 storage/tasks/<task_id>/。
+    output_dir: str = ""
+
     # ---- 图文叠加层（Overlay）----
     # 素材时长自动模式时，video_clip_duration=0 由服务层推导，这里记录推导后的值。
     # overlay_enabled 总开关；叠加层文本卡与图片卡均仅在开启时合成。
