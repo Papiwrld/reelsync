@@ -23,6 +23,63 @@ from app.utils import utils
 _rate_limit_store: dict[str, deque] = {}
 _rate_limit_lock = threading.Lock()
 
+# Redis 后端（enable_redis 时启用）：多 worker / 多实例共享限流计数。
+# 连接失败按 30s 退避回退到进程内计数，不阻塞请求路径。
+_rate_limit_redis_client = None
+_rate_limit_redis_checked_at = 0.0
+_RATE_LIMIT_REDIS_RETRY_SECONDS = 30.0
+
+
+def _get_rate_limit_redis():
+    global _rate_limit_redis_client, _rate_limit_redis_checked_at
+    if not config.app.get("enable_redis"):
+        return None
+    if _rate_limit_redis_client is not None:
+        return _rate_limit_redis_client
+    now = time.time()
+    if now - _rate_limit_redis_checked_at < _RATE_LIMIT_REDIS_RETRY_SECONDS:
+        return None
+    _rate_limit_redis_checked_at = now
+    try:
+        import redis as _redis_mod
+
+        client = _redis_mod.Redis(
+            host=config.app.get("redis_host", "localhost"),
+            port=int(config.app.get("redis_port", 6379)),
+            db=int(config.app.get("redis_db", 0)),
+            password=config.app.get("redis_password") or None,
+            socket_timeout=0.2,
+            socket_connect_timeout=0.2,
+        )
+        client.ping()
+        _rate_limit_redis_client = client
+        logger.info("rate limiter using Redis backend (distributed counters)")
+        return client
+    except Exception as exc:  # noqa: BLE001 - 限流后端不可用不能影响请求
+        logger.debug(f"redis rate limiter unavailable, using in-memory: {exc}")
+        return None
+
+
+def _check_rate_limit_redis(client, key: str, limit: int) -> tuple[bool, int]:
+    """固定窗口计数（INCR+EXPIRE 原子），返回 (是否限流, 重试等待秒数)。"""
+    redis_key = f"reelsync:ratelimit:{key}"
+    count = client.incr(redis_key)
+    if count == 1:
+        try:
+            client.expire(redis_key, 60)
+        except Exception:  # noqa: BLE001
+            pass
+    if count > limit:
+        retry_after = 60
+        try:
+            ttl = client.ttl(redis_key)
+            if isinstance(ttl, int) and ttl > 0:
+                retry_after = ttl
+        except Exception:  # noqa: BLE001
+            pass
+        return True, retry_after
+    return False, 0
+
 
 def _check_rate_limit(ip: str, path: str) -> tuple[bool, int]:
     now = time.time()
@@ -35,6 +92,17 @@ def _check_rate_limit(ip: str, path: str) -> tuple[bool, int]:
         key = f"{ip}:api"
     else:
         return False, 0
+
+    client = _get_rate_limit_redis()
+    if client is not None:
+        try:
+            return _check_rate_limit_redis(client, key, limit)
+        except Exception as exc:  # noqa: BLE001
+            global _rate_limit_redis_client, _rate_limit_redis_checked_at
+            _rate_limit_redis_client = None
+            _rate_limit_redis_checked_at = time.time()
+            logger.debug(f"redis rate limit check failed, fallback to memory: {exc}")
+
     with _rate_limit_lock:
         dq = _rate_limit_store.get(key)
         if dq is None:

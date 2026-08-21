@@ -485,6 +485,9 @@ class TestSoniloService(unittest.TestCase):
             source.write_bytes(b"video")
             with (
                 patch.object(sonilo.config, "app", {"sonilo_api_key": ""}),
+                # 凭据管理器迁移后 keyring 可能存有真实密钥，测试必须隔离，
+                # 否则“缺少密钥”分支会被真实凭据绕过并发出真实网络请求。
+                patch.object(sonilo, "get_secret", return_value=None),
                 patch.dict(os.environ, {}, clear=True),
                 patch.object(sonilo, "_create_video_proxy") as create_proxy,
             ):

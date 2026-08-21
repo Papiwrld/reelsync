@@ -156,6 +156,21 @@ Everything lives in `config.toml` (see `config.example.toml` for all options and
 | `[agentic]` | Agentic planning (max script revision rounds) |
 | `[research]` | Research provider: optional generic web-search endpoint, API key, cache TTL |
 
+### Credential storage (secure by default)
+
+API keys entered in the WebUI Settings are stored in your **OS credential manager** — Windows Credential Manager, macOS Keychain, or libsecret on Linux — never written to `config.toml`. Keys already present in `config.toml` are migrated automatically on first start and blanked from the file on the next save. Keys persist across restarts, so you only ever enter them once. Environment variables still override stored credentials for a single run (12-factor style). Set `REELSYNC_SKIP_SECRET_MIGRATION=1` to disable migration (e.g. in CI).
+
+### Audio & output quality
+
+- Final audio is loudness-normalized to **-14 LUFS** by default (`audio_loudnorm = true`) so voiceover + BGM + atmosphere never clip; set `false` to keep raw levels.
+- Frame rate is configurable via `video_fps` (24–60).
+- Set `output_dir` to copy every finished video to a folder of your choice, and `keep_intermediate_clips = true` to retain temp clips for debugging.
+- Subtitle rendering supports the vector **libass** engine (`subtitle_engine = "ass"`) with karaoke word highlighting; the bitmap PIL engine remains the default.
+
+### Task Manager
+
+The header popover lists all tasks with live status. Each row can be replayed, regenerated, opened or deleted; **Delete All** bulk-removes finished/failed tasks (running tasks are always kept) behind a two-step confirmation.
+
 ### Custom media API
 
 ReelSync can use any provider that returns a list of video URLs:

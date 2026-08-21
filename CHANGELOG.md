@@ -2,6 +2,32 @@
 
 All notable changes to ReelSync are documented in this file.
 
+## [1.3.0] - 2026-08-21
+
+### Added
+
+- **Credential Manager storage** — API keys entered in the WebUI Settings are stored in the OS credential manager (Windows Credential Manager / macOS Keychain / Linux libsecret) instead of plaintext `config.toml`; existing plaintext keys are migrated automatically on first start and blanked from the file on the next save. Keys persist across restarts — no re-entry. Env vars still override per run; `REELSYNC_SKIP_SECRET_MIGRATION=1` opts out.
+- **Audio loudness normalization** — final mix is normalized to -14 LUFS (`loudnorm` / MoviePy AudioNormalize) by default, preventing multi-track clipping; opt out with `audio_loudnorm = false`.
+- **Configurable frame rate** — `video_fps` (24–60, default 30) via config or `VideoParams.video_fps`.
+- **Word-timing scene durations** — per-scene material search now uses real Whisper word timestamps instead of character proportions when available, with automatic fallback.
+- **Multi-source web video search** — DuckDuckGo HTML video-search fallback finds TikTok/Instagram/Vimeo etc. footage (with per-platform `site:` filters) when YouTube search is empty or a non-YouTube platform is selected; downloads still go through yt-dlp direct URL (1800+ sites).
+- **Distributed rate limiting** — the per-IP API rate limiter uses Redis fixed-window counters when `enable_redis` is on (shared across workers/instances), with automatic in-memory fallback and 30 s backoff.
+- **Delete All in Task Manager** — two-step-confirm bulk deletion that skips running tasks; toast summary of deleted/kept counts.
+- **Custom output folder** — optional `output_dir` copies finished videos to a user-selected location; `keep_intermediate_clips` controls temp-clip retention.
+
+### Changed
+
+- Whisper defaults upgraded to `large-v3-turbo` with CUDA auto-detection (`device = "auto"`) and OOM fallback to `medium`; libass vector subtitle engine available via `subtitle_engine = "ass"` (PIL remains default).
+- LLM provider failures now surface as one-line readable errors (invalid key / rate limit / quota / timeout / unreachable) instead of raw tracebacks, translated in all 9 UI languages.
+- Task Manager polling caches script/final-video lookups by mtime, making idle 2-second polls nearly free.
+
+### Fixed
+
+- MoviePy 2.x `write_videofile` no longer receives an invalid `crf` kwarg (CRF is routed through ffmpeg params for libx264 only).
+- Concat list paths reject newline injection and validate paths stay inside the task directory; cached material writes are atomic (no more truncated duplicates under concurrency).
+- Static `/tasks` mount requires the API key when configured; CORS no longer combines wildcard origins with credentials.
+- Windows antivirus file locks no longer cause off-by-one cache cleanup counts (bounded retry).
+
 ## [1.2.0] - 2026-08-19
 
 ### Added

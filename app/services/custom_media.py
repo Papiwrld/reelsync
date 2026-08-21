@@ -925,7 +925,21 @@ def _cleanup_expired_generated_media_cache(
             try:
                 if 0 <= current_time - entry.stat(follow_symlinks=False).st_mtime < GENERATED_IMAGE_CACHE_TTL_SECONDS:
                     continue
-                os.unlink(entry.path)
+                try:
+                    os.unlink(entry.path)
+                except PermissionError:
+                    # Windows 下杀毒/索引服务可能短暂持有刚写入文件的句柄，
+                    # 高负载（如完整测试套件）下偶发超过单次重试窗口；
+                    # 按短退避重试数次，避免清理计数偶发偏差。
+                    for delay in (0.05, 0.1, 0.2):
+                        time.sleep(delay)
+                        try:
+                            os.unlink(entry.path)
+                            break
+                        except PermissionError:
+                            continue
+                    else:
+                        raise
                 deleted_count += 1
             except OSError as exc:
                 logger.warning(
