@@ -48,6 +48,7 @@ from app.models.schema import (
 )
 from app.services import bgm as bgm_service
 from app.services import cache_manager, llm, video, voice, webui_task
+from app.services import clip_generator
 from app.services import agent_llm, agentic
 from app.services import research as research_service
 from app.services import content_profile
@@ -138,6 +139,11 @@ LOCAL_MATERIAL_EXTENSIONS = {
     ".png",
 }
 CUSTOM_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+CLIP_VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
+_CLIP_SOURCE_FILE = "file"
+_CLIP_SOURCE_URL = "url"
+_CLIP_GENERATION_STATUS_KEY = "clip_generation_status"
+_CLIP_GENERATION_CLIPS_KEY = "clip_generation_clips"
 _FINAL_VIDEO_PATTERN = re.compile(
     r"^final-(?P<index>\d+)\.(?P<extension>mp4|mov|mkv|webm)$",
     re.IGNORECASE,
@@ -6297,6 +6303,191 @@ def _render_overlay_settings(panel, params):
             )
 
 
+def _render_clip_results(clips):
+    """渲染 Clip Generator 生成的竖版短片：预览、时间范围与下载按钮。"""
+    if not clips:
+        return
+    st.success(tr("Clip Generation Completed").format(count=len(clips)))
+    try:
+        for index, clip in enumerate(clips):
+            path = str(clip.get("path") or "")
+            start = float(clip.get("start") or 0.0)
+            end = float(clip.get("end") or 0.0)
+            title = str(clip.get("title") or "").strip()
+            reason = str(clip.get("reason") or "").strip()
+            caption = f"clip-{index + 1} · {start:.1f}s-{end:.1f}s"
+            if title:
+                caption = f"{caption} — {title}"
+            if reason and reason != "heuristic":
+                caption = f"{caption} · {reason}"
+            st.video(path)
+            st.caption(caption)
+            if not os.path.isfile(path):
+                logger.warning(f"generated clip is unavailable: {path}")
+                continue
+            with open(path, "rb") as clip_file:
+                st.download_button(
+                    f"{tr('Download Video')} {index + 1}",
+                    data=clip_file,
+                    file_name=os.path.basename(path),
+                    mime=mimetypes.guess_type(path)[0] or "video/mp4",
+                    key=f"download_clip_{index}_{os.path.basename(path)}",
+                    icon=":material/download:",
+                    on_click="ignore",
+                    use_container_width=True,
+                )
+    except Exception as exc:
+        logger.exception(f"failed to render clip results: error={exc}")
+
+
+def _handle_generate_clips(
+    source_type, uploaded_clip_file, clip_url, clip_count, min_duration, max_duration
+):
+    """校验 Clip Generator 输入并同步调用 clip_generator 服务。"""
+    if source_type == _CLIP_SOURCE_FILE:
+        if uploaded_clip_file is None:
+            st.error(tr("Please Provide a Clip Source"))
+            st.stop()
+        try:
+            upload_dir = utils.storage_dir("uploads", create=True)
+            source_video = _build_uploaded_file_path(
+                uploaded_clip_file,
+                upload_dir,
+                CLIP_VIDEO_EXTENSIONS,
+                "clip-source",
+            )
+        except ValueError:
+            st.error(tr("Clip Generation Failed"))
+            st.stop()
+        with open(source_video, "wb") as f:
+            f.write(uploaded_clip_file.getbuffer())
+    else:
+        if not clip_url:
+            st.error(tr("Please Provide a Clip Source"))
+            st.stop()
+        source_video = clip_url
+
+    def _do_generate_clips():
+        return clip_generator.generate_clips(
+            source_video,
+            count=int(clip_count),
+            min_duration=float(min_duration),
+            max_duration=float(max_duration),
+        )
+
+    clips = []
+    try:
+        clips = _run_with_state_status(
+            _CLIP_GENERATION_STATUS_KEY,
+            tr("Generating Clips"),
+            tr("Clips Generated"),
+            _do_generate_clips,
+        )
+    except BaseException as exc:  # noqa: BLE001 - record outcome consistently
+        if type(exc).__name__ == "RerunException":
+            raise
+        clips = []
+    if clips:
+        st.session_state[_CLIP_GENERATION_CLIPS_KEY] = clips
+    else:
+        st.session_state.pop(_CLIP_GENERATION_CLIPS_KEY, None)
+        st.error(tr("Clip Generation Failed"))
+
+
+def _render_clip_generator():
+    """Clip Generator：把长视频（本地文件或 URL）切成竖版短视频。
+
+    默认完全隐藏（避免 Streamlit AppTest 序列化折叠 Expander 内的
+    file_uploader 时出错）。用户在开关上勾选后才会渲染内部控件。
+    """
+    if not st.session_state.get("clip_generator_enabled", False):
+        if st.button(
+            tr("Enable Clip Generator"),
+            key="clip_generator_enable_button",
+            type="secondary",
+            use_container_width=True,
+        ):
+            st.session_state["clip_generator_enabled"] = True
+            st.rerun()
+        return
+    with st.expander(tr("Clip Generator"), expanded=False):
+        _render_clip_generator_panel()
+
+
+def _render_clip_generator_panel():
+    with st.container(key="clip_generator_panel", border=True):
+        st.markdown(f"### {tr('Clip Generator')}")
+        source_type = st.radio(
+            tr("Clip Source Type"),
+            options=[_CLIP_SOURCE_FILE, _CLIP_SOURCE_URL],
+            horizontal=True,
+            key="clip_source_type",
+            format_func=lambda value: (
+                tr("Clip Source File")
+                if value == _CLIP_SOURCE_FILE
+                else tr("Clip Source URL")
+            ),
+        )
+
+        uploaded_clip_file = None
+        clip_url = ""
+        if source_type == _CLIP_SOURCE_FILE:
+            uploaded_clip_file = st.file_uploader(
+                tr("Clip Source File"),
+                type=["mp4", "mov", "webm", "mkv"]
+                + [extension.upper() for extension in ("mp4", "mov", "webm", "mkv")],
+                key="clip_source_file_uploader",
+            )
+        else:
+            clip_url = st.text_input(
+                tr("Clip Source URL"),
+                key="clip_source_url_input",
+            ).strip()
+
+        count_col, min_col, max_col = st.columns(3)
+        clip_count = count_col.number_input(
+            tr("Clip Count"),
+            min_value=1,
+            max_value=10,
+            value=3,
+            key="clip_count_input",
+        )
+        min_duration = min_col.number_input(
+            tr("Clip Min Duration"),
+            min_value=5,
+            max_value=120,
+            value=15,
+            key="clip_min_duration_input",
+        )
+        max_duration = max_col.number_input(
+            tr("Clip Max Duration"),
+            min_value=10,
+            max_value=300,
+            value=60,
+            key="clip_max_duration_input",
+        )
+
+        if st.button(
+            tr("Generate Clips"),
+            key="generate_clips_button",
+            type="primary",
+            use_container_width=True,
+        ):
+            _handle_generate_clips(
+                source_type,
+                uploaded_clip_file,
+                clip_url,
+                clip_count,
+                min_duration,
+                max_duration,
+            )
+
+        _render_state_status(_CLIP_GENERATION_STATUS_KEY, tr("Generating Clips"))
+        _render_clip_results(
+            st.session_state.get(_CLIP_GENERATION_CLIPS_KEY) or []
+        )
+
+
 def _render_generation_controls(
     params, uploaded_files, uploaded_audio_file, uploaded_bgm_file, voice_mode
 ):
@@ -6668,6 +6859,8 @@ def _render_application():
     )
 
     _render_subtitle_settings(right_panel, params)
+
+    _render_clip_generator()
 
     generation_submitted = _render_generation_controls(
         params,

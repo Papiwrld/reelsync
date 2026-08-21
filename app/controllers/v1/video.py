@@ -21,6 +21,7 @@ from app.models.schema import (
     AudioRequest,
     BgmRetrieveResponse,
     BgmUploadResponse,
+    ClipRequest,
     SubtitleRequest,
     TaskDeletionResponse,
     TaskListResponse,
@@ -32,6 +33,7 @@ from app.models.schema import (
     VideoMaterialUploadResponse,
 )
 from app.services import bgm as bgm_service
+from app.services import clip_generator
 from app.services import state as sm
 from app.services import task as tm
 from app.utils import file_security, utils
@@ -200,6 +202,15 @@ def create_audio(
     return create_task(request, body, stop_at="audio")
 
 
+@router.post(
+    "/clips",
+    response_model=TaskResponse,
+    summary="Generate vertical clips from a long video",
+)
+def create_clips(request: Request, body: ClipRequest):
+    return create_clip_task(request, body)
+
+
 def _find_task_id_by_idempotency_key(
     idempotency_key: str, stop_at: str, page_size: int = 100
 ) -> str | None:
@@ -218,6 +229,194 @@ def _find_task_id_by_idempotency_key(
             break
         page += 1
     return None
+
+
+def _resolve_clip_source_video(source_video: str, task_id: str) -> str:
+    """Validate a local clip source path and return its real absolute path.
+
+    Only files inside trusted project directories (storage/ and resource/) are
+    accepted, mirroring the containment check used for custom output dirs.
+    """
+    cleaned = (source_video or "").strip().strip('"').strip("'")
+    if not cleaned:
+        raise HttpException(
+            task_id=task_id,
+            status_code=400,
+            message=f"{task_id}: source_video is required",
+        )
+    cleaned = os.path.expandvars(os.path.expanduser(cleaned))
+    if not os.path.isabs(cleaned):
+        cleaned = os.path.join(utils.root_dir(), cleaned)
+    resolved = os.path.realpath(cleaned)
+    allowed_roots = (
+        os.path.realpath(utils.storage_dir()),
+        os.path.realpath(utils.resource_dir()),
+    )
+    allowed = False
+    for root in allowed_roots:
+        try:
+            if os.path.commonpath([root, resolved]) == root:
+                allowed = True
+                break
+        except ValueError:
+            continue
+    if not allowed:
+        logger.warning(
+            f"reject clip source video outside allowed dirs, request_id: {task_id}, "
+            f"path: {source_video}"
+        )
+        raise HttpException(
+            task_id=task_id,
+            status_code=400,
+            message=f"{task_id}: source_video is not allowed: {source_video}",
+        )
+    if not os.path.isfile(resolved):
+        raise HttpException(
+            task_id=task_id,
+            status_code=400,
+            message=f"{task_id}: source_video file does not exist: {source_video}",
+        )
+    return resolved
+
+
+def _prepare_clip_params(body: ClipRequest, task_id: str) -> dict:
+    """Resolve/download the clip source video and build the task params dict.
+
+    http(s) sources are downloaded to the task dir before the task is queued;
+    local paths are validated for existence and containment within trusted dirs.
+    """
+    params = body.model_dump()
+    source_video = (body.source_video or "").strip()
+    if source_video.startswith(("http://", "https://")):
+        output_path = os.path.join(utils.task_dir(task_id), "source.mp4")
+        from app.services import web_scrape
+
+        ok = web_scrape.download_web_video(source_video, output_path)
+        if not ok or not os.path.isfile(output_path):
+            logger.error(
+                f"clip source video download failed, request_id: {task_id}, "
+                f"url: {source_video}"
+            )
+            raise HttpException(
+                task_id=task_id,
+                status_code=400,
+                message=f"{task_id}: failed to download source video: {source_video}",
+            )
+        params["source_video"] = output_path
+    else:
+        params["source_video"] = _resolve_clip_source_video(source_video, task_id)
+    return params
+
+
+def create_clip_task(request: Request, body: ClipRequest):
+    request_id = base.get_task_id(request)
+    idempotency_key = (
+        request.headers.get("X-Idempotency-Key")
+        or request.headers.get("x-idempotency-key")
+        or ""
+    ).strip() or None
+
+    if idempotency_key:
+        is_redis = config.app.get("enable_redis", False) and isinstance(
+            sm.state, sm.RedisState
+        )
+        if is_redis:
+            task_id = utils.get_uuid()
+            redis_key = f"idempotency:clips:{idempotency_key}"
+            claimed = sm.state._redis.set(redis_key, task_id, nx=True, ex=86400)
+            if not claimed:
+                existing_task_id = sm.state._redis.get(redis_key)
+                if existing_task_id:
+                    existing_task_id = existing_task_id.decode("utf-8")
+                    logger.info(
+                        f"reusing task for idempotency key: {idempotency_key}, task_id={existing_task_id}"
+                    )
+                    return utils.get_response(
+                        200,
+                        {
+                            "task_id": existing_task_id,
+                            "request_id": request_id,
+                            "params": body.model_dump(),
+                        },
+                    )
+            params = _prepare_clip_params(body, task_id)
+            task = {
+                "task_id": task_id,
+                "request_id": request_id,
+                "params": params,
+            }
+            sm.state.update_task(
+                task_id, stop_at="clips", idempotency_key=idempotency_key
+            )
+            task_manager.add_task(
+                clip_generator.start_clip_generation, task_id=task_id, params=params
+            )
+            logger.success(f"Task created: {utils.to_json(task)}")
+            return utils.get_response(200, task)
+        else:
+            # In-memory mode: use lock + double-check
+            with _idempotency_lock:
+                existing_task_id = _find_task_id_by_idempotency_key(
+                    idempotency_key, "clips"
+                )
+                if existing_task_id:
+                    logger.info(
+                        f"reusing task for idempotency key: {idempotency_key}, task_id={existing_task_id}"
+                    )
+                    return utils.get_response(
+                        200,
+                        {
+                            "task_id": existing_task_id,
+                            "request_id": request_id,
+                            "params": body.model_dump(),
+                        },
+                    )
+
+                task_id = utils.get_uuid()
+                params = _prepare_clip_params(body, task_id)
+                task = {
+                    "task_id": task_id,
+                    "request_id": request_id,
+                    "params": params,
+                }
+                sm.state.update_task(
+                    task_id, stop_at="clips", idempotency_key=idempotency_key
+                )
+                task_manager.add_task(
+                    clip_generator.start_clip_generation,
+                    task_id=task_id,
+                    params=params,
+                )
+                logger.success(f"Task created: {utils.to_json(task)}")
+                return utils.get_response(200, task)
+
+    # No idempotency key provided - normal task creation
+    task_id = utils.get_uuid()
+    try:
+        params = _prepare_clip_params(body, task_id)
+        task = {
+            "task_id": task_id,
+            "request_id": request_id,
+            "params": params,
+        }
+        sm.state.update_task(task_id, stop_at="clips")
+        task_manager.add_task(
+            clip_generator.start_clip_generation, task_id=task_id, params=params
+        )
+        logger.success(f"Task created: {utils.to_json(task)}")
+        return utils.get_response(200, task)
+    except TaskQueueFullError as e:
+        sm.state.delete_task(task_id)
+        logger.warning(
+            f"reject task because queue is full, request_id: {request_id}, task_id: {task_id}"
+        )
+        raise HttpException(
+            task_id=task_id, status_code=429, message=f"{request_id}: {e!s}"
+        )
+    except ValueError as e:
+        raise HttpException(
+            task_id=task_id, status_code=400, message=f"{request_id}: {e!s}"
+        )
 
 
 def create_task(

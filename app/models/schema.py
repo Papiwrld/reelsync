@@ -470,6 +470,24 @@ class AudioRequest(BaseModel):
     video_source: Optional[str] = "local"
 
 
+class ClipRequest(BaseModel):
+    """
+    Clip Generator 请求：从一段长视频提取多条竖屏高光片段。
+
+    source_video 可以是本地上传视频（storage/local_videos、resource 等受信任
+    目录内的文件），也可以是 http(s) 直链/平台链接，服务端会先用 yt-dlp 下载
+    到任务目录后再排队处理。
+    """
+
+    source_video: str
+    count: int = Field(default=3, ge=1, le=10)
+    min_duration: float = Field(default=15.0, ge=5, le=120)
+    max_duration: float = Field(default=60.0, ge=10, le=300)
+    target_width: int = 1080
+    target_height: int = 1920
+    burn_subtitles: bool = False
+
+
 class VideoScriptParams:
     """
     {
