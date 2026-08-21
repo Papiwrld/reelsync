@@ -543,7 +543,8 @@
     "Delete All Tasks": "Eliminar todas las tareas",
     "Confirm Delete All Tasks": "Confirmar: ¿eliminar {count} tareas?",
     "Tasks Deleted Summary": "{count} tareas eliminadas",
-    "Tasks Skipped Processing": "Se mantuvieron {count} tareas en ejecución"
+    "Tasks Skipped Processing": "Se mantuvieron {count} tareas en ejecución",
+    "Gemini Image (Nano Banana)": "Imagen Gemini (Nano Banana)"
   },
   "Agent Stage Intelligence": "Analizando nicho y audiencia",
   "Agent Stage Research": "Investigando el tema",

@@ -543,7 +543,8 @@
     "Delete All Tasks": "Удалить все задачи",
     "Confirm Delete All Tasks": "Подтвердите: удалить задач ({count})?",
     "Tasks Deleted Summary": "Удалено задач: {count}",
-    "Tasks Skipped Processing": "Запущенных задач оставлено: {count}"
+    "Tasks Skipped Processing": "Запущенных задач оставлено: {count}",
+    "Gemini Image (Nano Banana)": "Изображение Gemini (Nano Banana)"
   },
   "Agent Stage Intelligence": "Анализ ниши и аудитории",
   "Agent Stage Research": "Исследование темы",

@@ -544,7 +544,8 @@
     "Delete All Tasks": "Hapus Semua Tugas",
     "Confirm Delete All Tasks": "Konfirmasi: hapus {count} tugas?",
     "Tasks Deleted Summary": "{count} tugas dihapus",
-    "Tasks Skipped Processing": "{count} tugas yang berjalan tetap disimpan"
+    "Tasks Skipped Processing": "{count} tugas yang berjalan tetap disimpan",
+    "Gemini Image (Nano Banana)": "Gambar Gemini (Nano Banana)"
   },
   "Agent Stage Intelligence": "Menganalisis niche & audiens",
   "Agent Stage Research": "Meneliti topik",

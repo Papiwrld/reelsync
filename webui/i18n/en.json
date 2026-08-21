@@ -570,7 +570,8 @@
     "Delete All Tasks": "Delete All Tasks",
     "Confirm Delete All Tasks": "Confirm: delete {count} tasks?",
     "Tasks Deleted Summary": "Deleted {count} tasks",
-    "Tasks Skipped Processing": "{count} running task(s) were kept"
+    "Tasks Skipped Processing": "{count} running task(s) were kept",
+    "Gemini Image (Nano Banana)": "Gemini Image (Nano Banana)"
   },
   "Agent Stage Intelligence": "Analyzing the niche & audience",
   "Agent Stage Research": "Researching the topic",

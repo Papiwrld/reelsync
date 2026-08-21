@@ -1316,6 +1316,11 @@ def _auto_provider_configs() -> list[tuple[str, Callable]]:
     providers: list[tuple[str, Callable]] = []
     if _custom_media_svc.is_custom_api_configured():
         providers.append(("custom_api", _custom_media_svc.search_media_custom_api))
+    if _custom_media_svc.is_gemini_image_configured():
+        # Nano Banana：高质量免费图片源（quota 耗尽自动回退 pollinations）。
+        providers.append(
+            ("gemini_image", _custom_media_svc.search_media_gemini_image)
+        )
     if config.app.get("pexels_api_keys"):
         providers.append(("pexels", search_videos_pexels))
     if config.app.get("pixabay_api_keys"):
@@ -1595,6 +1600,10 @@ def download_videos(
     elif source == "pollinations":
         provider = "pollinations"
         remote_search_videos = None
+    elif source == "gemini_image":
+        # Nano Banana 高质量免费图片源：quota 耗尽自动回退 pollinations。
+        provider = "gemini_image"
+        remote_search_videos = None
     elif source == "web_scrape":
         from app.services import web_scrape as _web_scrape_svc
 
@@ -1620,6 +1629,14 @@ def download_videos(
             from app.services import custom_media as _custom_media_svc
 
             items = _custom_media_svc.search_media_pollinations(
+                search_term=search_term,
+                minimum_duration=minimum_duration,
+                video_aspect=video_aspect,
+            )
+        elif provider == "gemini_image":
+            from app.services import custom_media as _custom_media_svc
+
+            items = _custom_media_svc.search_media_gemini_image(
                 search_term=search_term,
                 minimum_duration=minimum_duration,
                 video_aspect=video_aspect,

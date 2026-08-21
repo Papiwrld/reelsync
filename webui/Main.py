@@ -3858,6 +3858,7 @@ def _render_video_settings(panel, params):
                     "auto",
                 ),
                 ("Custom API (Hybrid)", "custom_api"),
+                (tr("Gemini Image (Nano Banana)"), "gemini_image"),
                 (tr("Pexels"), "pexels"),
                 (tr("Pixabay"), "pixabay"),
                 (tr("Coverr"), "coverr"),
@@ -3932,10 +3933,11 @@ def _render_video_settings(panel, params):
 
             if params.video_source == "auto":
                 # F1 多来源选择：指定哪些供应商参与 auto 来源；顺序仍按内置
-                # 优先级（custom_api → pexels → pixabay → coverr → web_scrape
-                # → pollinations），多选框只决定“是否参与”。
+                # 优先级（custom_api → gemini_image → pexels → pixabay → coverr
+                # → web_scrape → pollinations），多选框只决定“是否参与”。
                 auto_provider_options = [
                     "custom_api",
+                    "gemini_image",
                     "pexels",
                     "pixabay",
                     "coverr",
@@ -3944,6 +3946,7 @@ def _render_video_settings(panel, params):
                 ]
                 auto_provider_labels = {
                     "custom_api": "Custom API (Hybrid)",
+                    "gemini_image": tr("Gemini Image (Nano Banana)"),
                     "pexels": tr("Pexels"),
                     "pixabay": tr("Pixabay"),
                     "coverr": tr("Coverr"),

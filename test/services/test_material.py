@@ -623,7 +623,7 @@ class TestMaterialTlsVerification(unittest.TestCase):
             with (
                 patch(
                     "app.services.material.requests.get", return_value=fake_response
-                ) as get,
+                ),
                 patch("app.services.material.VideoFileClip", FakeVideoFileClip),
             ):
                 video_path = material.save_video(
@@ -1271,6 +1271,9 @@ class TestAutoProviderSelection(unittest.TestCase):
     _MATERIAL_KEYS = (
         "custom_api_url",
         "custom_api_key",
+        "custom_api_response_format",
+        "custom_api_image_url",
+        "gemini_api_key",
         "pexels_api_keys",
         "pixabay_api_keys",
         "coverr_api_keys",
@@ -1313,7 +1316,7 @@ class TestAutoProviderSelection(unittest.TestCase):
         self.assertEqual(self._provider_names(), ["pexels"])
 
     def test_all_configured_providers_are_included(self):
-        """全部配置时按 custom_api → pexels → pixabay → coverr → web_scrape 顺序。"""
+        """?????? custom_api  pexels  pixabay  coverr  web_scrape ???"""
         config.app["custom_api_url"] = "https://veo.example/v1"
         config.app["custom_api_key"] = "secret"
         config.app["pexels_api_keys"] = ["pexels-key"]
@@ -1324,6 +1327,12 @@ class TestAutoProviderSelection(unittest.TestCase):
             self._provider_names(),
             ["custom_api", "pexels", "pixabay", "coverr", "web_scrape"],
         )
+
+    def test_gemini_image_included_when_gemini_configured(self):
+        """配置 gemini_api_key 后，auto 来源纳入 gemini_image（Nano Banana）。"""
+        config.app["gemini_api_key"] = "AIza-test"
+        config.app["pexels_api_keys"] = ["pexels-key"]
+        self.assertEqual(self._provider_names(), ["gemini_image", "pexels"])
 
     def test_no_provider_returns_free_mode_pollinations(self):
         """没有任何配置时返回 Pollinations：免费模式零 Key 也能出片。"""

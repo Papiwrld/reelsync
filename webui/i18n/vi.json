@@ -543,7 +543,8 @@
     "Delete All Tasks": "Xóa tất cả tác vụ",
     "Confirm Delete All Tasks": "Xác nhận: xóa {count} tác vụ?",
     "Tasks Deleted Summary": "Đã xóa {count} tác vụ",
-    "Tasks Skipped Processing": "Đã giữ lại {count} tác vụ đang chạy"
+    "Tasks Skipped Processing": "Đã giữ lại {count} tác vụ đang chạy",
+    "Gemini Image (Nano Banana)": "Ảnh Gemini (Nano Banana)"
   },
   "Agent Stage Intelligence": "Đang phân tích niche & khán giả",
   "Agent Stage Research": "Đang nghiên cứu chủ đề",

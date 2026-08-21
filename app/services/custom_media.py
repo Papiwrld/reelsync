@@ -269,6 +269,40 @@ _GEMINI_MAX_RETRIES = 3
 _GEMINI_RETRY_BACKOFF_SECONDS = 3.0
 _GEMINI_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
+# 最近一次 Gemini 请求的失败原因。专用于“配额/限流耗尽时回退到免费兜底源
+# （pollinations）”的判断；取值："quota" / "invalid_key" / "unavailable" /
+# "empty" / None。只反映最近一次调用，不跨线程承诺 —— 素材搜索本身并发，
+# 这里仅作为最佳努力信号，线程竞争只会让某次搜索多走/少走一次兜底，无害。
+_gemini_last_failure_reason: str | None = None
+
+
+def _gemini_clear_failure():
+    global _gemini_last_failure_reason
+    _gemini_last_failure_reason = None
+
+
+def _gemini_record_failure(reason: str | None):
+    global _gemini_last_failure_reason
+    if reason is not None:
+        _gemini_last_failure_reason = reason
+
+
+def gemini_last_failure_reason() -> str | None:
+    """返回最近一次 Gemini 请求的失败原因（供调用方决定是否回退兜底源）。"""
+    return _gemini_last_failure_reason
+
+
+def _classify_gemini_failure(status_code: int, body_text: str) -> str:
+    """把 Gemini HTTP 失败归类为可操作的失败原因。"""
+    lowered = (body_text or "").lower()
+    if status_code == 429 or "rate limit" in lowered or "quota" in lowered:
+        return "quota"
+    if status_code in (401, 403) or "api key" in lowered or "permission" in lowered:
+        return "invalid_key"
+    if status_code >= 500 or "overloaded" in lowered:
+        return "unavailable"
+    return "empty"
+
 
 def _gemini_aspect_ratio(video_aspect: VideoAspect) -> str:
     return {
@@ -435,6 +469,7 @@ def _search_gemini(
             timeout=(30, 300),
         )
     except Exception as exc:
+        _gemini_record_failure("unavailable")
         logger.error(
             f"Gemini {media_type} request raised an exception: "
             f"error={type(exc).__name__}, detail={redact_request_error(exc, api_key)}"
@@ -460,6 +495,7 @@ def _search_gemini(
                 timeout=(30, 300),
             )
         except Exception as exc:
+            _gemini_record_failure("unavailable")
             logger.error(
                 f"Gemini {media_type} retry raised an exception: "
                 f"error={type(exc).__name__}, detail={redact_request_error(exc, api_key)}"
@@ -467,6 +503,7 @@ def _search_gemini(
             return []
 
     if resp.status_code >= 400:
+        _gemini_record_failure(_classify_gemini_failure(resp.status_code, resp.text))
         logger.error(
             f"Gemini {media_type} request failed: status={resp.status_code}, "
             f"response={resp.text[:500]!r}"
@@ -532,6 +569,8 @@ def _search_gemini(
             }
             items.append(item)
 
+    if not items:
+        _gemini_record_failure("empty")
     logger.info(
         f"Gemini {media_type} returned {len(items)} usable items for term={search_term!r}"
     )
@@ -719,6 +758,82 @@ def search_media_custom_api(
         return image_items
 
     return []
+
+
+def is_gemini_image_configured() -> bool:
+    """是否配置了 Gemini 图片生成（Nano Banana / gemini-*-flash-image）。
+
+    优先使用 `gemini_api_key`（WebUI 标准 Gemini 密钥）；也兼容通过
+    `custom_api_key` + `custom_api_image_url` 手工接入的 Gemini 端点。
+    """
+    api_key = config.app.get("gemini_api_key", "").strip()
+    if api_key:
+        return True
+    cfg = _get_custom_api_cfg()
+    return bool(
+        cfg["key"]
+        and (cfg["image_url"] or cfg["url"])
+        and cfg["response_format"] == "gemini"
+    )
+
+
+def search_media_gemini_image(
+    search_term: str,
+    minimum_duration: int,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    save_dir: str = "",
+) -> List[MaterialInfo]:
+    """Nano Banana 高质量图片生成源（free tier，配额有限）。
+
+    使用 Gemini API 生成一张配图；当 free tier 配额/限流耗尽或服务不可用时
+    自动回退到 Pollinations（免费无密钥兜底），保证场景永远有素材。
+    失败原因见 :func:`gemini_last_failure_reason`。
+    """
+    _gemini_clear_failure()
+    if not save_dir:
+        save_dir = utils.storage_dir("generated_media", create=True)
+
+    gemini_key = config.app.get("gemini_api_key", "").strip()
+    if gemini_key:
+        cfg = _get_custom_api_cfg()
+        cfg["key"] = gemini_key
+        image_url = config.app.get(
+            "custom_api_image_url", _GEMINI_BASE_URL
+        ).strip() or _GEMINI_BASE_URL
+    else:
+        cfg = _get_custom_api_cfg()
+        image_url = cfg["image_url"] or cfg["url"]
+        if not image_url:
+            return []
+
+    items = _search_gemini(
+        search_term,
+        video_aspect,
+        cfg,
+        image_url,
+        "image",
+        minimum_duration,
+        save_dir,
+    )
+    if items:
+        for item in items:
+            item.provider = "gemini_image"
+            item.source_info = dict(item.source_info or {})
+            item.source_info["provider"] = "gemini_image"
+        return items
+
+    reason = gemini_last_failure_reason()
+    # 仅当 Gemini 真实失败（配额/密钥/不可用）时回退；“空结果”不兜底，
+    # 让上游（material 层）正常走其余供应商，避免每个词都烧 pollinations。
+    if reason in {"quota", "invalid_key", "unavailable"}:
+        logger.warning(
+            f"Gemini image generation failed for term={search_term!r} "
+            f"(reason={reason}); falling back to Pollinations"
+        )
+        return search_media_pollinations(
+            search_term, minimum_duration, video_aspect, save_dir
+        )
+    return items
 
 
 # ---------------------------------------------------------------------------

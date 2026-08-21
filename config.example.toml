@@ -136,7 +136,10 @@ custom_api_image_url = "https://generativelanguage.googleapis.com/v1beta/interac
 custom_api_provider_preset = "Google Gemini (Nano Banana / Veo)"
 custom_api_video_model = "gemini-omni-flash-preview"
 custom_api_image_model = "gemini-3.1-flash-image"
-auto_providers = [ "custom_api", "pixabay", "coverr", "web_scrape", "pollinations",]
+# 高质量免费图片源：Nano Banana（gemini-2.5-flash-image）。仅需在上方
+# gemini_api_key 填一个免费 Gemini API Key 即可启用（free tier 按日配额，
+# 耗尽或限流时自动回退到 pollinations 兜底，不阻塞出片）。
+auto_providers = [ "gemini_image", "custom_api", "pixabay", "coverr", "web_scrape", "pollinations",]
 enable_pollinations = true
 cache_max_size_gb = 10
 cache_max_files = 500

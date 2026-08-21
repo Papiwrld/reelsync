@@ -544,7 +544,8 @@
     "Delete All Tasks": "Tüm görevleri sil",
     "Confirm Delete All Tasks": "Onayla: {count} görev silinsin mi?",
     "Tasks Deleted Summary": "{count} görev silindi",
-    "Tasks Skipped Processing": "{count} çalışan görev korundu"
+    "Tasks Skipped Processing": "{count} çalışan görev korundu",
+    "Gemini Image (Nano Banana)": "Gemini Görüntü (Nano Banana)"
   },
   "Agent Stage Intelligence": "Niş ve kitle analiz ediliyor",
   "Agent Stage Research": "Konu araştırılıyor",
