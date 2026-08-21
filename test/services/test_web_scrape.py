@@ -426,14 +426,14 @@ class TestSearchVideosViaHtmlSearch(unittest.TestCase):
     def test_parses_duckduckgo_redirect_links(self):
         """DuckDuckGo 结果的 uddg 重定向 URL 应被正确解析。"""
         html = """<html><body>
-        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc123&amp;rut=abc">title</a>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc12345678&amp;rut=abc">title</a>
         <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.tiktok.com%2F%40user%2Fvideo%2F456&amp;rut=def">tiktok</a>
         </body></html>"""
         mock_resp = self._mock_response(html)
         with patch("requests.get", return_value=mock_resp):
             result = ws._search_videos_via_html_search("test", "portrait", 3, "youtube")
         self.assertEqual(len(result), 2)
-        self.assertEqual(result[0].url, "https://www.youtube.com/watch?v=abc123")
+        self.assertEqual(result[0].url, "https://www.youtube.com/watch?v=abc12345678")
         self.assertEqual(result[1].url, "https://www.tiktok.com/@user/video/456")
 
     def test_filters_non_video_hosts(self):
@@ -461,8 +461,8 @@ class TestSearchVideosViaHtmlSearch(unittest.TestCase):
     def test_deduplicates_urls(self):
         """重复 URL 应被去重。"""
         html = """<html><body>
-        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Da&amp;rut=1">a</a>
-        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Da&amp;rut=2">a dup</a>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc12345678&amp;rut=1">a</a>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc12345678&amp;rut=2">a dup</a>
         </body></html>"""
         mock_resp = self._mock_response(html)
         with patch("requests.get", return_value=mock_resp):
@@ -504,5 +504,60 @@ class TestHtmlSearchIntegration(unittest.TestCase):
         self.assertIn("https://www.tiktok.com/@user/video/123", [r.url for r in results])
 
 
+class TestIsDirectVideoUrl(unittest.TestCase):
+    """_is_direct_video_url 过滤 tag/主页/搜索页，只保留可直接下载的视频。"""
+
+    def test_tiktok_direct_videos_accepted(self):
+        self.assertTrue(ws._is_direct_video_url("https://www.tiktok.com/@user/video/7567888805643013384"))
+        self.assertTrue(ws._is_direct_video_url("https://www.tiktok.com/@user/photo/123456"))
+
+    def test_tiktok_listing_pages_rejected(self):
+        self.assertFalse(ws._is_direct_video_url("https://www.tiktok.com/tag/dancetutorial/"))
+        self.assertFalse(ws._is_direct_video_url("https://www.tiktok.com/@user"))
+        self.assertFalse(ws._is_direct_video_url("https://www.tiktok.com/explore"))
+        self.assertFalse(ws._is_direct_video_url("https://www.tiktok.com/search?q=dance"))
+
+    def test_youtube_direct_accepted(self):
+        self.assertTrue(ws._is_direct_video_url("https://www.youtube.com/watch?v=J---aiyznGQ"))
+        self.assertTrue(ws._is_direct_video_url("https://youtu.be/J---aiyznGQ"))
+        self.assertTrue(ws._is_direct_video_url("https://www.youtube.com/shorts/J---aiyznGQ"))
+
+    def test_youtube_listing_rejected(self):
+        self.assertFalse(ws._is_direct_video_url("https://www.youtube.com/@channel"))
+        self.assertFalse(ws._is_direct_video_url("https://www.youtube.com/playlist?list=abc"))
+        self.assertFalse(ws._is_direct_video_url("https://www.youtube.com/user/foo"))
+
+    def test_instagram_direct_accepted(self):
+        self.assertTrue(ws._is_direct_video_url("https://www.instagram.com/reel/abc123/"))
+        self.assertTrue(ws._is_direct_video_url("https://www.instagram.com/p/xyz789"))
+
+    def test_instagram_listing_rejected(self):
+        self.assertFalse(ws._is_direct_video_url("https://www.instagram.com/explore/"))
+        self.assertFalse(ws._is_direct_video_url("https://www.instagram.com/@user"))
+
+    def test_vimeo_dailymotion(self):
+        self.assertTrue(ws._is_direct_video_url("https://vimeo.com/123456"))
+        self.assertTrue(ws._is_direct_video_url("https://www.dailymotion.com/video/x7abc"))
+        self.assertFalse(ws._is_direct_video_url("https://vimeo.com/channels/abc"))
+
+    def test_x_status_accepted(self):
+        self.assertTrue(ws._is_direct_video_url("https://x.com/user/status/123456"))
+
+    def test_html_search_filters_listing_pages(self):
+        """HTML 搜索候选里混入的 tag/主页页应被过滤，只留直接视频。"""
+        html = """<html><body>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.tiktok.com%2Ftag%2Fdancetutorial%2F&amp;rut=1">tag page</a>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.tiktok.com%2F%40user%2Fvideo%2F123&amp;rut=2">video</a>
+        </body></html>"""
+        mock_resp = MagicMock()
+        mock_resp.text = html
+        mock_resp.raise_for_status = MagicMock()
+        with patch("requests.get", return_value=mock_resp):
+            result = ws._search_videos_via_html_search("dance", "portrait", 3, "tiktok")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].url, "https://www.tiktok.com/@user/video/123")
+
+
 if __name__ == "__main__":
+    unittest.main()
     unittest.main()

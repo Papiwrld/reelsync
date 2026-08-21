@@ -92,6 +92,78 @@ def _is_video_host(url: str) -> bool:
     return any(host == s or host.endswith("." + s) for s in _VIDEO_HOST_SUFFIXES)
 
 
+# 各站点“可直接下载的单条视频”URL 形态。搜索命中 tag / 频道主页 / explore
+# 等列表页时，yt-dlp 要么取不到单条视频、要么取到无关合集，场景匹配会失败，
+# 因此 HTML 搜索阶段就把这类 URL 过滤掉，只保留真正可下载的视频地址。
+def _is_direct_video_url(url: str) -> bool:
+    """判断 URL 是否指向可直接下载的单条视频（而非 tag/主页/搜索页）。"""
+    try:
+        parsed = urllib.parse.urlparse(url)
+        host = (parsed.hostname or "").lower()
+        path = parsed.path or ""
+    except ValueError:
+        return False
+
+    # 已知的“列表页/主页”路径片段：命中即拒绝。
+    non_video_markers = (
+        "/tag/",
+        "/tags/",
+        "/hashtag/",
+        "/explore",
+        "/search",
+        "/foryou",
+        "/following",
+        "/followers",
+        "/liked",
+        "/channel/",
+        "/c/",
+        "/user/",
+        "/playlist",
+        "/community",
+        "/about",
+        "/reels",
+        "/stories",
+        "/collections",
+        "/channels",
+    )
+    # /user/ 是 X/Twitter 状态页的合法路径，不能一刀切拒绝。
+    if host.endswith(("x.com", "twitter.com")):
+        non_video_markers = tuple(m for m in non_video_markers if m != "/user/")
+    if any(m in path for m in non_video_markers):
+        return False
+
+    if host.endswith("tiktok.com"):
+        # 直接视频：/@user/video/<id> 或 /@user/photo/<id>
+        return bool(re.search(r"/@[^/]+/(video|photo|v)/\d+", path))
+    if host.endswith("instagram.com"):
+        # 直接帖/Reel：/reel/<id>、/p/<id>、/tv/<id>
+        return bool(re.search(r"/(reel|p|tv)/[^/]+/?$", path))
+    if host.endswith("youtube.com") or host == "youtu.be":
+        if host == "youtu.be":
+            return bool(re.search(r"/[A-Za-z0-9_-]{11}$", path))
+        # query 参数（?v=）不在 path 里，需对完整 URL 匹配。
+        return bool(
+            re.search(r"/watch\?v=[A-Za-z0-9_-]{11}", url)
+            or re.search(r"/shorts/[A-Za-z0-9_-]{11}", path)
+            or re.search(r"/live/[A-Za-z0-9_-]+", path)
+            or re.search(r"/embed/[A-Za-z0-9_-]{11}", path)
+        )
+    if host.endswith("vimeo.com"):
+        return bool(re.search(r"/\d+", path))
+    if host.endswith("dailymotion.com"):
+        return bool(re.search(r"/video/[A-Za-z0-9_-]+", path))
+    if host.endswith("fb.watch") or host.endswith("facebook.com"):
+        # fb.watch 短链或 facebook 视频/watch 页
+        return bool(re.search(r"/watch", path)) or host.endswith("fb.watch")
+    if host.endswith(("x.com", "twitter.com")):
+        return bool(re.search(r"/\w+/status/\d+", path))
+    if host.endswith("twitch.tv"):
+        return bool(re.search(r"/videos/\d+", path))
+    if host.endswith(("bilibili.com", "rumble.com", "bitchute.com")):
+        return True
+    return True
+
+
 def _search_videos_via_html_search(
     search_term: str,
     video_aspect: str,
@@ -141,6 +213,11 @@ def _search_videos_via_html_search(
         if not url or not url.startswith(("http://", "https://")):
             continue
         if not _is_video_host(url):
+            continue
+        if not _is_direct_video_url(url):
+            logger.debug(
+                f"html search dropped non-downloadable listing page: {url}"
+            )
             continue
         if url in seen:
             continue
