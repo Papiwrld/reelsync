@@ -78,6 +78,10 @@ custom_llm_model_name = ""
 llm_fallback_api_keys = ""
 llm_fallback_base_url = ""
 llm_fallback_model_name = ""
+# 任务终态回调（完成/失败时 POST JSON）。webhook_secret 非空时请求头携带
+# X-ReelSync-Signature: HMAC-SHA256(body)。供 n8n / cron / MCP 客户端监听。
+webhook_url = ""
+webhook_secret = ""
 ollama_base_url = ""
 ollama_model_name = ""
 oneapi_api_key = ""

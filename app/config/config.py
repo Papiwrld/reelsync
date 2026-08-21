@@ -35,7 +35,7 @@ _secret_sourced_keys: set[tuple[str, str]] = set()
 
 def _is_secret_key(key: str) -> bool:
     """Return True if *key* holds a credential that should not be written to config.toml."""
-    return key.endswith("_key") or key.endswith("_keys") or key.endswith("_password") or key in (
+    return key.endswith("_key") or key.endswith("_keys") or key.endswith("_password") or key.endswith("_secret") or key in (
         "speech_key", "password", "api_key", "username",
     )
 
@@ -623,6 +623,8 @@ _ENV_VAR_MAPPING = {
     "LLM_FALLBACK_API_KEYS": ("app", "llm_fallback_api_keys"),
     "LLM_FALLBACK_BASE_URL": ("app", "llm_fallback_base_url"),
     "LLM_FALLBACK_MODEL_NAME": ("app", "llm_fallback_model_name"),
+    "WEBHOOK_URL": ("app", "webhook_url"),
+    "WEBHOOK_SECRET": ("app", "webhook_secret"),
     "CUSTOM_LLM_API_KEY": ("app", "custom_llm_api_key"),
     "CUSTOM_LLM_BASE_URL": ("app", "custom_llm_base_url"),
     "CUSTOM_LLM_MODEL_NAME": ("app", "custom_llm_model_name"),

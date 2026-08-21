@@ -307,6 +307,12 @@ def _mark_task_failed(task_id: str, stage: str, error: str) -> dict:
         failed_stage=failure["failed_stage"],
         error=failure["error"],
     )
+    try:
+        from app.services import webhooks
+
+        webhooks.notify_task_terminal(task_id)
+    except Exception as exc:  # noqa: BLE001 - webhook 通知失败不影响失败状态
+        logger.debug(f"task failed webhook notification error: {exc}")
     return failure
 
 
@@ -1987,7 +1993,7 @@ def start(
         snapshot = config.snapshot_config_for_task()
         config.begin_task_config(snapshot)
         try:
-            return _run_pipeline(
+            result = _run_pipeline(
                 task_id,
                 params,
                 stop_at=stop_at,
@@ -1995,6 +2001,15 @@ def start(
             )
         finally:
             config.end_task_config()
+        # 任务进入终态（completed / failed 任一 stop_at）后触发完成回调，
+        # 供外部自动化（n8n / cron / MCP 客户端）监听，无需轮询 API。
+        try:
+            from app.services import webhooks
+
+            webhooks.notify_task_terminal(task_id, snapshot)
+        except Exception as exc:  # noqa: BLE001 - webhook 通知失败不影响任务结果
+            logger.debug(f"task terminal webhook notification failed: {exc}")
+        return result
     except Exception as exc:
         logger.exception(
             f"unexpected task pipeline failure, task_id: {task_id}, error: {exc}"

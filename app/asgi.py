@@ -138,10 +138,30 @@ async def application_lifespan(_: FastAPI):
 
     task_service.recover_interrupted_generation_tasks()
     task_service.recover_interrupted_cross_posts()
+
+    # MCP session manager 需要随进程运行（内部维护流式会话的任务组）。
+    # 挂载的 /mcp Starlette app 自身 lifespan 不会被 FastAPI 调用，因此
+    # 在这里显式进入 MCP 的 session_manager.run() 上下文。
+    mcp_manager = None
+    try:
+        from app.mcp_server import get_mcp_server
+
+        mcp_manager = get_mcp_server().session_manager
+        mcp_ctx = mcp_manager.run() if mcp_manager else None
+        if mcp_ctx:
+            await mcp_ctx.__aenter__()
+    except Exception as exc:  # noqa: BLE001 - MCP 生命周期失败不应阻止 API 启动
+        logger.warning(f"MCP session manager failed to start: {exc}")
+        mcp_ctx = None
     try:
         yield
     finally:
         logger.info("shutdown event")
+        if mcp_ctx is not None:
+            try:
+                await mcp_ctx.__aexit__(None, None, None)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"MCP session manager shutdown error: {exc}")
 
 
 def exception_handler(request: Request, e: HttpException):
@@ -226,6 +246,29 @@ task_dir = utils.task_dir()
 app.mount(
     "/tasks", StaticFiles(directory=task_dir, html=False, follow_symlink=False), name=""
 )
+
+# MCP server: AI agents can drive the pipeline over the Model Context Protocol.
+# Mounted at /mcp (Streamable HTTP). Auth mirrors the REST API: when an api_key
+# is configured, clients must send Authorization: Bearer <key>.
+# Starlette Mount only matches "/mcp/" — rewrite bare "/mcp" so MCP clients
+# (which use the conventional "/mcp" URL) reach the transport.
+try:
+    from app.mcp_server import get_mcp_app
+
+    _mcp_app = get_mcp_app()
+
+    @app.middleware("http")
+    async def _rewrite_mcp_slash(request: Request, call_next):
+        if request.url.path == "/mcp":
+            scope = request.scope
+            scope["path"] = "/mcp/"
+            scope["raw_path"] = b"/mcp/"
+        return await call_next(request)
+
+    app.mount("/mcp/", _mcp_app, name="mcp")
+    logger.info("MCP server mounted at /mcp")
+except Exception as exc:  # noqa: BLE001 - MCP must never prevent API boot
+    logger.warning(f"failed to mount MCP server: {exc}")
 
 public_dir = utils.public_dir()
 app.mount("/", StaticFiles(directory=public_dir, html=False, follow_symlink=False), name="")
