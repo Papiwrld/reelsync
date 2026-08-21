@@ -119,10 +119,14 @@ class TestPlaintextMigration(unittest.TestCase):
         config._secret_sourced_keys.update(self._original_sourced)
 
     def test_migrates_plaintext_and_marks_sourced(self):
+        import os
+
         cfg = {"app": {"openai_api_key": "sk-legacy"}}
+        env = dict(os.environ)
+        env.pop("REELSYNC_SKIP_SECRET_MIGRATION", None)
         with (
             patch.object(config, "set_secret", return_value=True) as set_mock,
-            patch.dict(os_environ := __import__("os").environ, {}, clear=False),
+            patch.dict(os.environ, env, clear=True),
         ):
             migrated = config._migrate_plaintext_secrets_to_keyring(cfg)
         self.assertEqual(migrated, 1)

@@ -676,11 +676,19 @@ _SECTION_KEY_TO_ENV.update(
 )
 
 
-def _serialize_secret_value(value) -> str:
-    """列表型密钥（如 pexels_api_keys）序列化为逗号分隔串，与 env 解析一致。"""
+def _serialize_secret_value(value) -> str | None:
+    """列表型密钥（如 pexels_api_keys）序列化为逗号分隔串，与 env 解析一致。
+
+    仅接受纯字符串/字符串列表；其他类型（测试 Mock、数字、对象）返回 None
+    并由调用方拒绝持久化 —— 防止垃圾值污染系统凭据管理器。
+    """
+    if isinstance(value, str):
+        return value
     if isinstance(value, (list, tuple)):
-        return ",".join(str(v).strip() for v in value if str(v).strip())
-    return str(value)
+        if all(isinstance(v, str) for v in value):
+            return ",".join(v.strip() for v in value if v.strip())
+        return None
+    return None
 
 
 def _is_empty_secret_value(value) -> bool:
@@ -725,7 +733,14 @@ def _maybe_persist_secret(section_dict, key, value):
         if _is_empty_secret_value(value):
             delete_secret(env_var)
         else:
-            if not set_secret(env_var, _serialize_secret_value(value)):
+            serialized = _serialize_secret_value(value)
+            if serialized is None:
+                logger.warning(
+                    f"refusing to persist non-string credential for "
+                    f"{section_name}.{key} (type={type(value).__name__})"
+                )
+                return
+            if not set_secret(env_var, serialized):
                 logger.debug(
                     f"system credential manager unavailable; keeping "
                     f"{section_name}.{key} in local config only"
@@ -763,7 +778,10 @@ def _migrate_plaintext_secrets_to_keyring(config: dict):
         if _is_empty_secret_value(value):
             continue
         try:
-            if not set_secret(env_var, _serialize_secret_value(value)):
+            serialized = _serialize_secret_value(value)
+            if serialized is None:
+                continue
+            if not set_secret(env_var, serialized):
                 continue
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"secret migration skipped for {section_name}.{key}: {exc}")
