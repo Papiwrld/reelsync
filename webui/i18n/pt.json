@@ -551,7 +551,8 @@
     "LLM Fallback Base Url Placeholder": "https://fallback.example.com/v1",
     "LLM Fallback Model Name": "Nome do modelo de fallback (opcional)",
     "LLM Fallback Model Name Hint": "ID do modelo para chaves de fallback.",
-    "LLM Fallback Model Name Placeholder": "gpt-5.5-nano"
+    "LLM Fallback Model Name Placeholder": "gpt-5.5-nano",
+    "LLM Fallback Settings": "Configurações de fallback (opcional)"
   },
   "Agent Stage Intelligence": "Analisando nicho e público",
   "Agent Stage Research": "Pesquisando o tópico",

@@ -2312,46 +2312,55 @@ def _render_settings_dialog():
                 )
                 # 可选备用 Key：主 Key 失败（额度耗尽 / Key 无效 / 限流）时按
                 # 顺序自动尝试。与主 Key 同 Provider、同模型，覆盖脚本、关键词、
-                # 智能体策划与 QA 等全部内容创作环节。
-                st_llm_fallback_api_keys = llm_form_panel.text_input(
-                    tr("LLM Fallback API Keys"),
-                    value=config.app.get("llm_fallback_api_keys", ""),
-                    type="password",
-                    key="llm_fallback_api_keys_input",
-                    help=tr("LLM Fallback API Keys Hint"),
-                    placeholder=tr("LLM Fallback API Keys Placeholder"),
+                # 智能体策划与 QA 等全部内容创作环节。折叠在 Expander 中节省空间。
+                has_fallback = bool(
+                    config.app.get("llm_fallback_api_keys", "")
+                    or config.app.get("llm_fallback_base_url", "")
+                    or config.app.get("llm_fallback_model_name", "")
                 )
-                _set_runtime_config(
-                    "app",
-                    "llm_fallback_api_keys",
-                    st_llm_fallback_api_keys.strip(),
-                )
+                with llm_form_panel.expander(
+                    tr("LLM Fallback Settings"),
+                    expanded=has_fallback,
+                ):
+                    st_llm_fallback_api_keys = llm_form_panel.text_input(
+                        tr("LLM Fallback API Keys"),
+                        value=config.app.get("llm_fallback_api_keys", ""),
+                        type="password",
+                        key="llm_fallback_api_keys_input",
+                        help=tr("LLM Fallback API Keys Hint"),
+                        placeholder=tr("LLM Fallback API Keys Placeholder"),
+                    )
+                    _set_runtime_config(
+                        "app",
+                        "llm_fallback_api_keys",
+                        st_llm_fallback_api_keys.strip(),
+                    )
 
-                st_llm_fallback_base_url = llm_form_panel.text_input(
-                    tr("LLM Fallback Base Url"),
-                    value=config.app.get("llm_fallback_base_url", ""),
-                    key="llm_fallback_base_url_input",
-                    help=tr("LLM Fallback Base Url Hint"),
-                    placeholder=tr("LLM Fallback Base Url Placeholder"),
-                )
-                _set_runtime_config(
-                    "app",
-                    "llm_fallback_base_url",
-                    st_llm_fallback_base_url.strip(),
-                )
+                    st_llm_fallback_base_url = llm_form_panel.text_input(
+                        tr("LLM Fallback Base Url"),
+                        value=config.app.get("llm_fallback_base_url", ""),
+                        key="llm_fallback_base_url_input",
+                        help=tr("LLM Fallback Base Url Hint"),
+                        placeholder=tr("LLM Fallback Base Url Placeholder"),
+                    )
+                    _set_runtime_config(
+                        "app",
+                        "llm_fallback_base_url",
+                        st_llm_fallback_base_url.strip(),
+                    )
 
-                st_llm_fallback_model_name = llm_form_panel.text_input(
-                    tr("LLM Fallback Model Name"),
-                    value=config.app.get("llm_fallback_model_name", ""),
-                    key="llm_fallback_model_name_input",
-                    help=tr("LLM Fallback Model Name Hint"),
-                    placeholder=tr("LLM Fallback Model Name Placeholder"),
-                )
-                _set_runtime_config(
-                    "app",
-                    "llm_fallback_model_name",
-                    st_llm_fallback_model_name.strip(),
-                )
+                    st_llm_fallback_model_name = llm_form_panel.text_input(
+                        tr("LLM Fallback Model Name"),
+                        value=config.app.get("llm_fallback_model_name", ""),
+                        key="llm_fallback_model_name_input",
+                        help=tr("LLM Fallback Model Name Hint"),
+                        placeholder=tr("LLM Fallback Model Name Placeholder"),
+                    )
+                    _set_runtime_config(
+                        "app",
+                        "llm_fallback_model_name",
+                        st_llm_fallback_model_name.strip(),
+                    )
 
             st_llm_base_url = llm_base_url
             if llm_provider_spec.show_base_url:

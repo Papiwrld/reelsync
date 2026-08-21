@@ -551,7 +551,8 @@
     "LLM Fallback Base Url Placeholder": "https://fallback.example.com/v1",
     "LLM Fallback Model Name": "Резервное имя модели (необязательно)",
     "LLM Fallback Model Name Hint": "ID модели для ключей-резерва.",
-    "LLM Fallback Model Name Placeholder": "gpt-5.5-nano"
+    "LLM Fallback Model Name Placeholder": "gpt-5.5-nano",
+    "LLM Fallback Settings": "Резервные настройки (необязательно)"
   },
   "Agent Stage Intelligence": "Анализ ниши и аудитории",
   "Agent Stage Research": "Исследование темы",

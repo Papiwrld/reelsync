@@ -551,7 +551,8 @@
     "LLM Fallback Base Url Placeholder": "https://fallback.example.com/v1",
     "LLM Fallback Model Name": "Fallback Model Name (tuỳ chọn)",
     "LLM Fallback Model Name Hint": "ID mô hình cho khóa dự phòng.",
-    "LLM Fallback Model Name Placeholder": "gpt-5.5-nano"
+    "LLM Fallback Model Name Placeholder": "gpt-5.5-nano",
+    "LLM Fallback Settings": "Cài đặt dự phòng (tuỳ chọn)"
   },
   "Agent Stage Intelligence": "Đang phân tích niche & khán giả",
   "Agent Stage Research": "Đang nghiên cứu chủ đề",

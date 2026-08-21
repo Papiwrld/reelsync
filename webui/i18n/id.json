@@ -552,7 +552,8 @@
     "LLM Fallback Base Url Placeholder": "https://fallback.example.com/v1",
     "LLM Fallback Model Name": "Nama Model Cadangan (opsional)",
     "LLM Fallback Model Name Hint": "Model ID untuk kunci cadangan.",
-    "LLM Fallback Model Name Placeholder": "gpt-5.5-nano"
+    "LLM Fallback Model Name Placeholder": "gpt-5.5-nano",
+    "LLM Fallback Settings": "Pengaturan Fallback (opsional)"
   },
   "Agent Stage Intelligence": "Menganalisis niche & audiens",
   "Agent Stage Research": "Meneliti topik",
