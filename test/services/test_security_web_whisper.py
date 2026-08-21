@@ -84,42 +84,62 @@ class TestCheckRateLimit(unittest.TestCase):
 
 
 class TestDecideWebSearchPlatform(unittest.TestCase):
-    """web 搜索平台选择：关键词启发式优先，否则交给 LLM，失败回退 youtube。"""
+    """web 搜索平台选择：默认 YouTube（无水印），仅开启水印移除时才用 TikTok/IG。"""
 
     _LLM_APP_CONFIG: ClassVar[dict] = {
         "llm_provider": "openai",
         "openai_api_key": "test-key",
     }
 
-    def test_tiktok_keywords_short_circuit_without_llm(self):
+    _LLM_APP_CONFIG_WATERMARK: ClassVar[dict] = {
+        "llm_provider": "openai",
+        "openai_api_key": "test-key",
+        "enable_watermark_removal": True,
+    }
+
+    def test_defaults_to_youtube_even_with_tiktok_keywords(self):
+        """默认（无水印移除）下，dance/viral 等词也不走 TikTok——避免水印素材。"""
         for term in ("dance", "viral", "tiktok", "challenge", "trend", "Dance Battle"):
             with (
                 self.subTest(term=term),
                 patch("app.config.config.app", self._LLM_APP_CONFIG),
                 patch("app.services.llm._generate_response") as llm,
             ):
-                    self.assertEqual(
-                        ws._decide_web_search_platform(term), "tiktok"
-                    )
-                    llm.assert_not_called()
+                self.assertEqual(
+                    ws._decide_web_search_platform(term), "youtube"
+                )
+                llm.assert_not_called()
 
-    def test_llm_chooses_instagram(self):
+    def test_watermark_removal_on_allows_heuristic_tiktok(self):
+        """显式开启水印移除后，dance/viral 关键词恢复走 TikTok。"""
         with (
-            patch("app.config.config.app", self._LLM_APP_CONFIG),
+            patch("app.config.config.app", self._LLM_APP_CONFIG_WATERMARK),
+            patch("app.services.llm._generate_response") as llm,
+        ):
+            self.assertEqual(
+                ws._decide_web_search_platform("dance"), "tiktok"
+            )
+            llm.assert_not_called()
+
+    def test_llm_chooses_instagram_only_with_watermark_removal(self):
+        with (
+            patch("app.config.config.app", self._LLM_APP_CONFIG_WATERMARK),
             patch("app.services.llm._generate_response", return_value="instagram"),
         ):
             self.assertEqual(ws._decide_web_search_platform("cats"), "instagram")
 
-    def test_llm_chooses_youtube(self):
+    def test_llm_skipped_without_watermark_removal(self):
+        """无水印移除时 LLM 不参与平台决策，直接 YouTube。"""
         with (
             patch("app.config.config.app", self._LLM_APP_CONFIG),
-            patch("app.services.llm._generate_response", return_value="youtube"),
+            patch("app.services.llm._generate_response") as llm,
         ):
             self.assertEqual(ws._decide_web_search_platform("cats"), "youtube")
+            llm.assert_not_called()
 
     def test_llm_error_falls_back_to_youtube(self):
         with (
-            patch("app.config.config.app", self._LLM_APP_CONFIG),
+            patch("app.config.config.app", self._LLM_APP_CONFIG_WATERMARK),
             patch(
                 "app.services.llm._generate_response",
                 return_value="Error: provider failed",
@@ -169,6 +189,11 @@ class TestSearchVideosWebScrapeFallback(unittest.TestCase):
         failed = self._FakePopen(stderr="Unsupported url scheme", returncode=1)
         succeeded = self._FakePopen(stdout=payload + "\n")
         with (
+            patch.dict(
+                "app.config.config.app",
+                {"enable_watermark_removal": True},
+                clear=False,
+            ),
             patch.object(
                 ws, "_rewrite_query_for_web_search", return_value="dance battle"
             ),

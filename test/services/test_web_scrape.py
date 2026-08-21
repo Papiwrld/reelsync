@@ -446,17 +446,44 @@ class TestSearchVideosViaHtmlSearch(unittest.TestCase):
             result = ws._search_videos_via_html_search("test", "portrait", 3, "youtube")
         self.assertEqual(result, [])
 
-    def test_platform_tiktok_adds_site_filter(self):
-        """platform='tiktok' 时请求参数应包含 site:tiktok.com。"""
+    def test_platform_tiktok_adds_site_filter_with_watermark_removal(self):
+        """platform='tiktok' 且开启水印移除时请求参数应包含 site:tiktok.com。"""
         html = """<html><body>
         <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.tiktok.com%2F%40user%2Fvideo%2F1&amp;rut=a">tiktok</a>
         </body></html>"""
         mock_resp = self._mock_response(html)
-        with patch("requests.get", return_value=mock_resp) as mock_get:
+        with (
+            patch(
+                "requests.get", return_value=mock_resp
+            ) as mock_get,
+            patch.dict(
+                "app.config.config.app",
+                {"enable_watermark_removal": True},
+                clear=False,
+            ),
+        ):
             result = ws._search_videos_via_html_search("dance", "portrait", 3, "tiktok")
         self.assertEqual(len(result), 1)
         call_kwargs = mock_get.call_args.kwargs
         self.assertIn("site:tiktok.com", call_kwargs["params"]["q"])
+
+    def test_tiktok_platform_without_watermark_removal_no_site_filter(self):
+        """未开启水印移除时，platform='tiktok' 也不定向 site:tiktok.com。"""
+        html = """<html><body>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.tiktok.com%2F%40user%2Fvideo%2F1&amp;rut=a">tiktok</a>
+        </body></html>"""
+        mock_resp = self._mock_response(html)
+        with (
+            patch("requests.get", return_value=mock_resp) as mock_get,
+            patch.dict(
+                "app.config.config.app",
+                {"enable_watermark_removal": False},
+                clear=False,
+            ),
+        ):
+            ws._search_videos_via_html_search("dance", "portrait", 3, "tiktok")
+        call_kwargs = mock_get.call_args.kwargs
+        self.assertNotIn("site:tiktok.com", call_kwargs["params"]["q"])
 
     def test_deduplicates_urls(self):
         """重复 URL 应被去重。"""

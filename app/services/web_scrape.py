@@ -179,9 +179,20 @@ def _search_videos_via_html_search(
     import requests
 
     query = search_term
-    if platform == "tiktok":
+    # TikTok/Instagram 结果自带水印。只有用户显式开启水印移除（拥有版权）
+    # 时才定向到这些平台；否则只做通用视频搜索，让干净素材（YouTube 等）胜出。
+    watermark_removal_on = False
+    try:
+        from app.config import config
+
+        watermark_removal_on = bool(
+            config.app.get("enable_watermark_removal", False)
+        )
+    except Exception:  # noqa: BLE001
+        watermark_removal_on = False
+    if platform == "tiktok" and watermark_removal_on:
         query = f"{search_term} site:tiktok.com"
-    elif platform == "instagram":
+    elif platform == "instagram" and watermark_removal_on:
         query = f"{search_term} site:instagram.com"
     try:
         resp = requests.get(
@@ -383,15 +394,29 @@ _YT_SEARCH_PREFIX = "ytsearch5:"
 def _decide_web_search_platform(search_term: str) -> str:
     """Decide best yt-dlp search platform for a scene term.
 
-    Heuristic: terms containing dance/viral/tiktok/challenge/trend are better
-    served by TikTok; otherwise use LLM to decide. Falls back to youtube on
-    any failure. Return value is one of 'youtube', 'tiktok', 'instagram'.
+    YouTube is the default for clean, watermark-free footage.
+    TikTok/Instagram are only used when watermark removal is explicitly enabled
+    (user-owned content, enable_watermark_removal=true). Falls back to youtube
+    on any failure. Return value is one of 'youtube', 'tiktok', 'instagram'.
     """
+    try:
+        from app.config import config
+
+        has_watermark_removal = bool(config.app.get("enable_watermark_removal", False))
+    except Exception:
+        has_watermark_removal = False
+
+    # TikTok/Instagram content has baked-in watermarks. Only route there when the
+    # user explicitly owns the content and has turned watermark removal on.
+    if not has_watermark_removal:
+        return "youtube"
+
+    # 仅在水印移除开启时启用关键词启发式：dance/viral 等短内容词直接选 TikTok。
     term_lower = (search_term or "").lower()
     if any(kw in term_lower for kw in _TIKTOK_KEYWORDS):
         return "tiktok"
+
     try:
-        from app.config import config
         from app.services import llm as _llm
 
         has_llm = bool(
