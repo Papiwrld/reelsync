@@ -544,7 +544,14 @@
     "Confirm Delete All Tasks": "Подтвердите: удалить задач ({count})?",
     "Tasks Deleted Summary": "Удалено задач: {count}",
     "Tasks Skipped Processing": "Запущенных задач оставлено: {count}",
-    "Gemini Image (Nano Banana)": "Изображение Gemini (Nano Banana)"
+    "Gemini Image (Nano Banana)": "Изображение Gemini (Nano Banana)",
+    "Custom (OpenAI-compatible)": "Пользовательский (OpenAI-совместимый)",
+    "LLM Fallback Base Url": "Резервный Base Url (необязательно)",
+    "LLM Fallback Base Url Hint": "Альтернативный эндпоинт для ключей-резерва.",
+    "LLM Fallback Base Url Placeholder": "https://fallback.example.com/v1",
+    "LLM Fallback Model Name": "Резервное имя модели (необязательно)",
+    "LLM Fallback Model Name Hint": "ID модели для ключей-резерва.",
+    "LLM Fallback Model Name Placeholder": "gpt-5.5-nano"
   },
   "Agent Stage Intelligence": "Анализ ниши и аудитории",
   "Agent Stage Research": "Исследование темы",

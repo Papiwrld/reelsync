@@ -2327,6 +2327,32 @@ def _render_settings_dialog():
                     st_llm_fallback_api_keys.strip(),
                 )
 
+                st_llm_fallback_base_url = llm_form_panel.text_input(
+                    tr("LLM Fallback Base Url"),
+                    value=config.app.get("llm_fallback_base_url", ""),
+                    key="llm_fallback_base_url_input",
+                    help=tr("LLM Fallback Base Url Hint"),
+                    placeholder=tr("LLM Fallback Base Url Placeholder"),
+                )
+                _set_runtime_config(
+                    "app",
+                    "llm_fallback_base_url",
+                    st_llm_fallback_base_url.strip(),
+                )
+
+                st_llm_fallback_model_name = llm_form_panel.text_input(
+                    tr("LLM Fallback Model Name"),
+                    value=config.app.get("llm_fallback_model_name", ""),
+                    key="llm_fallback_model_name_input",
+                    help=tr("LLM Fallback Model Name Hint"),
+                    placeholder=tr("LLM Fallback Model Name Placeholder"),
+                )
+                _set_runtime_config(
+                    "app",
+                    "llm_fallback_model_name",
+                    st_llm_fallback_model_name.strip(),
+                )
+
             st_llm_base_url = llm_base_url
             if llm_provider_spec.show_base_url:
                 st_llm_base_url = llm_form_panel.text_input(

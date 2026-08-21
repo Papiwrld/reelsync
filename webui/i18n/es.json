@@ -544,7 +544,14 @@
     "Confirm Delete All Tasks": "Confirmar: ¿eliminar {count} tareas?",
     "Tasks Deleted Summary": "{count} tareas eliminadas",
     "Tasks Skipped Processing": "Se mantuvieron {count} tareas en ejecución",
-    "Gemini Image (Nano Banana)": "Imagen Gemini (Nano Banana)"
+    "Gemini Image (Nano Banana)": "Imagen Gemini (Nano Banana)",
+    "Custom (OpenAI-compatible)": "Personalizado (compatible con OpenAI)",
+    "LLM Fallback Base Url": "URL base de respaldo (opcional)",
+    "LLM Fallback Base Url Hint": "Endpoint alternativo usado al reintentar con claves de respaldo.",
+    "LLM Fallback Base Url Placeholder": "https://fallback.example.com/v1",
+    "LLM Fallback Model Name": "Nombre del modelo de respaldo (opcional)",
+    "LLM Fallback Model Name Hint": "ID del modelo para claves de respaldo.",
+    "LLM Fallback Model Name Placeholder": "gpt-5.5-nano"
   },
   "Agent Stage Intelligence": "Analizando nicho y audiencia",
   "Agent Stage Research": "Investigando el tema",

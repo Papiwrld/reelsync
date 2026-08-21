@@ -545,7 +545,14 @@
     "Confirm Delete All Tasks": "Konfirmasi: hapus {count} tugas?",
     "Tasks Deleted Summary": "{count} tugas dihapus",
     "Tasks Skipped Processing": "{count} tugas yang berjalan tetap disimpan",
-    "Gemini Image (Nano Banana)": "Gambar Gemini (Nano Banana)"
+    "Gemini Image (Nano Banana)": "Gambar Gemini (Nano Banana)",
+    "Custom (OpenAI-compatible)": "Kustom (kompatibel OpenAI)",
+    "LLM Fallback Base Url": "Fallback Base Url (opsional)",
+    "LLM Fallback Base Url Hint": "Endpoint alternatif saat mencoba kunci cadangan.",
+    "LLM Fallback Base Url Placeholder": "https://fallback.example.com/v1",
+    "LLM Fallback Model Name": "Nama Model Cadangan (opsional)",
+    "LLM Fallback Model Name Hint": "Model ID untuk kunci cadangan.",
+    "LLM Fallback Model Name Placeholder": "gpt-5.5-nano"
   },
   "Agent Stage Intelligence": "Menganalisis niche & audiens",
   "Agent Stage Research": "Meneliti topik",

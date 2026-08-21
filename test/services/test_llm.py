@@ -311,6 +311,7 @@ class TestLiteLLMProvider(unittest.TestCase):
                 "aihubmix",
                 "aimlapi",
                 "evolink",
+                "custom_llm",
                 "ollama",
                 "oneapi",
                 "litellm",
@@ -426,7 +427,9 @@ class TestLiteLLMProvider(unittest.TestCase):
         }
 
         for provider in LLM_PROVIDER_REGISTRY:
-            if provider.requires_api_key:
+            if provider.requires_api_key and provider.provider_id not in (
+                "custom_llm",
+            ):
                 self.assertTrue(provider.api_key_url, provider.provider_id)
                 self.assertTrue(
                     provider.api_key_url.startswith("https://"),
@@ -1612,7 +1615,7 @@ class TestFallbackApiKeys(unittest.TestCase):
         """主 Key 抛错时必须用备用 Key 完成请求，而不是直接返回错误。"""
         calls = []
 
-        def fake_generate_with_key(prompt, runtime_app_config, llm_provider, provider, api_key):
+        def fake_generate_with_key(prompt, runtime_app_config, llm_provider, provider, api_key, **_kw):
             calls.append(api_key)
             if api_key == "primary-key":
                 raise RuntimeError("quota exhausted")
@@ -1632,7 +1635,7 @@ class TestFallbackApiKeys(unittest.TestCase):
 
     def test_generate_response_returns_error_when_all_keys_fail(self):
         """所有 Key 都失败时返回 "Error: ..."，与旧行为一致，供上层识别失败。"""
-        def fake_generate_with_key(prompt, runtime_app_config, llm_provider, provider, api_key):
+        def fake_generate_with_key(prompt, runtime_app_config, llm_provider, provider, api_key, **_kw):
             raise RuntimeError(f"failed: {api_key}")
 
         with (
@@ -1651,7 +1654,7 @@ class TestFallbackApiKeys(unittest.TestCase):
         """主 Key 正常时只调用一次，不触发备用 Key。"""
         calls = []
 
-        def fake_generate_with_key(prompt, runtime_app_config, llm_provider, provider, api_key):
+        def fake_generate_with_key(prompt, runtime_app_config, llm_provider, provider, api_key, **_kw):
             calls.append(api_key)
             return "ok"
 

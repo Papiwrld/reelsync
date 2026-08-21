@@ -236,6 +236,30 @@ def _collect_llm_api_keys(runtime_app_config, provider) -> list:
     return keys or [""]
 
 
+def _resolve_fallback_overrides(runtime_app_config, is_fallback: bool) -> dict | None:
+    """备用 Key 可选的独立 Base Url / Model 覆盖。
+
+    当某条 Fallback Key 配置了独立 Base Url 或 Model（-finish），
+    使用它而不是主 Provider 的值；否则返回 None。
+    """
+    if not is_fallback:
+        return None
+    fallback_base_url = str(
+        runtime_app_config.get("llm_fallback_base_url", "") or ""
+    ).strip()
+    fallback_model_name = str(
+        runtime_app_config.get("llm_fallback_model_name", "") or ""
+    ).strip()
+    if not fallback_base_url and not fallback_model_name:
+        return None
+    overrides: dict = {}
+    if fallback_base_url:
+        overrides["base_url"] = fallback_base_url
+    if fallback_model_name:
+        overrides["model_name"] = fallback_model_name
+    return overrides
+
+
 def _generate_response(prompt: str, app_config=None) -> str:
     try:
         # WebUI 在视频生成期间允许用户准备下一条文案。调用方可以传入提交瞬间
@@ -260,11 +284,24 @@ def _generate_response(prompt: str, app_config=None) -> str:
         # 主 Key 失败（额度耗尽 / Key 无效 / 网络断开）时依次尝试备用 Key，
         # 全部失败才返回错误。这里位于所有上层调用（脚本、关键词、智能体图、
         # 连接测试）的公共入口，因此多 Key 故障转移覆盖整个内容创作流程。
+        # 备用 Key 可通过 ``llm_fallback_base_url`` / ``llm_fallback_model_name``
+        # 指向不同端点/模型（例如代理或备用模型）。
         last_error: Exception | None = None
         for index, api_key in enumerate(api_keys):
+            is_fallback = index > 0
+            per_try_overrides = (
+                _resolve_fallback_overrides(runtime_app_config, is_fallback)
+                if is_fallback
+                else None
+            )
             try:
                 return _generate_response_with_key(
-                    prompt, runtime_app_config, llm_provider, provider, api_key
+                    prompt,
+                    runtime_app_config,
+                    llm_provider,
+                    provider,
+                    api_key,
+                    fallback_overrides=per_try_overrides,
                 )
             except Exception as exc:  # noqa: BLE001 - providers raise heterogeneous errors
                 last_error = exc
@@ -288,18 +325,28 @@ def _generate_response_with_key(
     llm_provider: str,
     provider,
     api_key: str,
+    fallback_overrides: dict | None = None,
+    **_ignored,
 ) -> str:
     try:
-        configured_model = runtime_app_config.get(provider.config_key("model_name"), "")
+        if fallback_overrides and "model_name" in fallback_overrides:
+            configured_model = fallback_overrides["model_name"]
+        else:
+            configured_model = runtime_app_config.get(
+                provider.config_key("model_name"), ""
+            )
         model_name = provider.resolve_model_name(configured_model)
         if configured_model and model_name != configured_model:
             logger.warning(
                 f"{llm_provider} model '{configured_model}' is deprecated, "
                 f"fallback to '{model_name}'"
             )
-        configured_base_url = runtime_app_config.get(
-            provider.config_key("base_url"), ""
-        )
+        if fallback_overrides and "base_url" in fallback_overrides:
+            configured_base_url = fallback_overrides["base_url"]
+        else:
+            configured_base_url = runtime_app_config.get(
+                provider.config_key("base_url"), ""
+            )
         base_url = provider.resolve_base_url(configured_base_url)
         if configured_base_url and configured_base_url.strip().rstrip("/") in {
             url.rstrip("/") for url in provider.deprecated_base_urls

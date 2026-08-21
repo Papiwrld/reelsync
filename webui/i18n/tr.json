@@ -545,7 +545,14 @@
     "Confirm Delete All Tasks": "Onayla: {count} görev silinsin mi?",
     "Tasks Deleted Summary": "{count} görev silindi",
     "Tasks Skipped Processing": "{count} çalışan görev korundu",
-    "Gemini Image (Nano Banana)": "Gemini Görüntü (Nano Banana)"
+    "Gemini Image (Nano Banana)": "Gemini Görüntü (Nano Banana)",
+    "Custom (OpenAI-compatible)": "Özel (OpenAI uyumlu)",
+    "LLM Fallback Base Url": "Fallback Base Url (opsiyonel)",
+    "LLM Fallback Base Url Hint": "Fallback anahtarlariyla yeniden denerken kullanilan alternatif endpoint.",
+    "LLM Fallback Base Url Placeholder": "https://fallback.example.com/v1",
+    "LLM Fallback Model Name": "Fallback Model Adı (opsiyonel)",
+    "LLM Fallback Model Name Hint": "Fallback anahtarlari icin model kimligi.",
+    "LLM Fallback Model Name Placeholder": "gpt-5.5-nano"
   },
   "Agent Stage Intelligence": "Niş ve kitle analiz ediliyor",
   "Agent Stage Research": "Konu araştırılıyor",

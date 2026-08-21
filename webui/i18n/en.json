@@ -571,7 +571,14 @@
     "Confirm Delete All Tasks": "Confirm: delete {count} tasks?",
     "Tasks Deleted Summary": "Deleted {count} tasks",
     "Tasks Skipped Processing": "{count} running task(s) were kept",
-    "Gemini Image (Nano Banana)": "Gemini Image (Nano Banana)"
+    "Gemini Image (Nano Banana)": "Gemini Image (Nano Banana)",
+    "Custom (OpenAI-compatible)": "Custom (OpenAI-compatible)",
+    "LLM Fallback Base Url": "Fallback Base Url (optional)",
+    "LLM Fallback Base Url Hint": "Alternative endpoint used when retrying with fallback keys (e.g. a proxy or backup provider).",
+    "LLM Fallback Base Url Placeholder": "https://fallback.example.com/v1",
+    "LLM Fallback Model Name": "Fallback Model Name (optional)",
+    "LLM Fallback Model Name Hint": "Model ID to use with fallback keys, if different from the main model.",
+    "LLM Fallback Model Name Placeholder": "gpt-5.5-nano"
   },
   "Agent Stage Intelligence": "Analyzing the niche & audience",
   "Agent Stage Research": "Researching the topic",

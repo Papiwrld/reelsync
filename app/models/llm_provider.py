@@ -209,6 +209,13 @@ LLM_PROVIDER_REGISTRY = (
     ),
     # 本地部署与通用网关
     LLMProviderSpec(
+        "custom_llm",
+        "Custom (OpenAI-compatible)",
+        api_key_url="",
+        default_model="gpt-5.5",
+        default_base_url="",
+    ),
+    LLMProviderSpec(
         "ollama",
         "Ollama",
         requires_api_key=False,
