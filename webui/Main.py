@@ -2311,17 +2311,19 @@ def _render_settings_dialog():
                     key=f"{llm_provider}_api_key_input",
                 )
                 # 可选备用 Key：主 Key 失败（额度耗尽 / Key 无效 / 限流）时按
-                # 顺序自动尝试。与主 Key 同 Provider、同模型，覆盖脚本、关键词、
-                # 智能体策划与 QA 等全部内容创作环节。折叠在 Expander 中节省空间。
+                # 顺序自动尝试。用 toggle 开关收纳，节省空间；关闭时清空备用
+                # 配置（toggle 即权威开关），避免对话框中 expander 的渲染异常。
                 has_fallback = bool(
                     config.app.get("llm_fallback_api_keys", "")
                     or config.app.get("llm_fallback_base_url", "")
                     or config.app.get("llm_fallback_model_name", "")
                 )
-                with llm_form_panel.expander(
+                fallback_enabled = llm_form_panel.toggle(
                     tr("LLM Fallback Settings"),
-                    expanded=has_fallback,
-                ):
+                    value=has_fallback,
+                    key="llm_fallback_enabled_toggle",
+                )
+                if fallback_enabled:
                     st_llm_fallback_api_keys = llm_form_panel.text_input(
                         tr("LLM Fallback API Keys"),
                         value=config.app.get("llm_fallback_api_keys", ""),
@@ -2361,6 +2363,11 @@ def _render_settings_dialog():
                         "llm_fallback_model_name",
                         st_llm_fallback_model_name.strip(),
                     )
+                elif has_fallback:
+                    # 关闭开关时清空备用配置，让 LLM 调用不再尝试备用 Key。
+                    _set_runtime_config("app", "llm_fallback_api_keys", "")
+                    _set_runtime_config("app", "llm_fallback_base_url", "")
+                    _set_runtime_config("app", "llm_fallback_model_name", "")
 
             st_llm_base_url = llm_base_url
             if llm_provider_spec.show_base_url:
