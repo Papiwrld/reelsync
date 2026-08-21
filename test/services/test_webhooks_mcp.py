@@ -87,6 +87,7 @@ class TestWebhookNotify(unittest.TestCase):
             patch.object(
                 sm.state, "get_task", return_value={"task_id": "t1", "state": "1"}
             ),
+            patch.object(sm.state, "update_task") as update_task,
             patch.object(
                 webhooks, "_webhook_config", return_value=("https://x/h", "s")
             ),
@@ -95,6 +96,88 @@ class TestWebhookNotify(unittest.TestCase):
             webhooks.notify_task_terminal("t1", {})
             thread_mock.assert_called_once()
             thread_mock.return_value.start.assert_called_once()
+            update_task.assert_not_called()
+
+    def test_notify_does_not_record_when_no_url(self):
+        """没有配置 webhook_url 时不写任务状态（避免污染每个任务）。"""
+        from app.services import state as sm
+
+        with (
+            patch.object(
+                sm.state,
+                "get_task",
+                return_value={
+                    "task_id": "t1",
+                    "state": 1,
+                    "progress": 100,
+                    "warnings": [],
+                },
+            ),
+            patch.object(sm.state, "update_task") as update_task,
+            patch.object(webhooks, "_webhook_config", return_value=("", "")),
+        ):
+            webhooks.notify_task_terminal("t1", {})
+
+        update_task.assert_not_called()
+
+    def test_send_with_retries_records_delivered(self):
+        """投递成功后应把 delivered 写回任务状态。"""
+        from app.services import state as sm
+
+        with (
+            patch.object(
+                sm.state,
+                "get_task",
+                return_value={
+                    "task_id": "t1",
+                    "state": 1,
+                    "progress": 100,
+                    "warnings": [],
+                },
+            ),
+            patch.object(sm.state, "update_task") as update_task,
+            patch.object(webhooks, "_deliver_once", return_value=True),
+        ):
+            self.assertTrue(
+                webhooks._send_with_retries("t1", "https://x/h", "s", {"a": 1})
+            )
+
+        update_task.assert_called_once()
+        self.assertEqual(
+            update_task.call_args.kwargs["webhook_state"], "delivered"
+        )
+        self.assertEqual(
+            update_task.call_args.kwargs["warnings"], ["webhook delivered"]
+        )
+
+    def test_send_with_retries_records_failed(self):
+        """多次重试都失败后应把 failed 写回任务状态。"""
+        from app.services import state as sm
+
+        with (
+            patch.object(
+                sm.state,
+                "get_task",
+                return_value={
+                    "task_id": "t1",
+                    "state": -1,
+                    "progress": 100,
+                    "warnings": [],
+                },
+            ),
+            patch.object(sm.state, "update_task") as update_task,
+            patch.object(webhooks, "_deliver_once", return_value=False),
+            patch.object(webhooks.time, "sleep"),
+        ):
+            self.assertFalse(
+                webhooks._send_with_retries("t1", "https://x/h", "s", {"a": 1})
+            )
+
+        update_task.assert_called_once()
+        self.assertEqual(update_task.call_args.kwargs["webhook_state"], "failed")
+        self.assertIn(
+            "webhook delivery failed", update_task.call_args.kwargs["warnings"][0]
+        )
 
 
 class TestMcpToolsContract(unittest.TestCase):

@@ -2,6 +2,22 @@
 
 All notable changes to ReelSync are documented in this file.
 
+## [1.4.0] - 2026-08-21
+
+### Added
+
+- **Clip Generator** — turn long videos into vertical shorts (ingest, Whisper transcript, ffmpeg `scdet` scene detection, LLM moment selection, face-tracking crop with center-crop fallback); `face_track` option in `ClipRequest`, the `/clips` API and the WebUI.
+- **MCP server** (4 tools at `/mcp`), completion webhooks (HMAC-SHA256, `webhook_url` / `webhook_secret`), agent skill (`skills/reelsync/SKILL.md`).
+- **Custom (OpenAI-compatible) LLM provider**, with fallback URL/model selection per key.
+
+### Changed
+
+- LLM fallback fields collapsed into an expander; Clip Generator hidden behind an enable toggle.
+
+### Fixed
+
+- Webhook delivery outcome is now recorded in task state (`webhook_state` + `warnings`).
+
 ## [1.3.0] - 2026-08-21
 
 ### Added

@@ -574,7 +574,10 @@
     "Clip Generation Failed": "剪辑生成失败，请检查源视频后重试。",
     "Clip Generation Completed": "剪辑生成完成：已生成 {count} 个剪辑",
     "Please Provide a Clip Source": "请先上传视频文件或输入视频链接",
-    "Enable Clip Generator": "启用剪辑生成器"
+    "Enable Clip Generator": "启用剪辑生成器",
+    "Clip Face Tracking": "跟踪说话者面部",
+    "Clip Face Tracking Hint": "竖屏裁切时保持说话者居中；未检测到人脸则回退居中裁切。",
+    "Clip Generator Hint": "粘贴长视频（播客、Vlog、网络研讨会）或链接，AI 自动挑选精彩瞬间生成竖版短片。"
   },
   "Agent Stage Intelligence": "分析赛道与受众",
   "Agent Stage Research": "研究检索中",

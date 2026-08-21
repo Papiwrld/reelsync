@@ -567,7 +567,10 @@
     "Clip Generation Failed": "Pembuatan klip gagal. Periksa video sumber dan coba lagi.",
     "Clip Generation Completed": "Pembuatan klip selesai: {count} klip siap",
     "Please Provide a Clip Source": "Silakan unggah file video atau masukkan URL video terlebih dahulu",
-    "Enable Clip Generator": "Aktifkan Generator Klip"
+    "Enable Clip Generator": "Aktifkan Generator Klip",
+    "Clip Face Tracking": "Lacak wajah pembicara",
+    "Clip Face Tracking Hint": "Menjaga pembicara tetap di tengah saat memotong vertikal; fallback ke potongan tengah jika wajah tidak terdeteksi.",
+    "Clip Generator Hint": "Tempel video panjang (podcast, vlog, webinar) atau URL untuk menghasilkan klip vertikal dengan momen pilihan AI."
   },
   "Agent Stage Intelligence": "Menganalisis niche & audiens",
   "Agent Stage Research": "Meneliti topik",

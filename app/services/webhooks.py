@@ -12,7 +12,10 @@ Configuration (config.toml [app] section):
                      the raw body. Empty secret -> no signature header.
 
 Delivery is best-effort and never blocks the pipeline: sends happen on a
-background thread with bounded retries. Failures are logged, not raised.
+background thread with bounded retries. The final outcome (``delivered`` /
+``failed`` / ``skipped``) is recorded in the task's ``webhook_state`` field and
+appended to its ``warnings`` list so callers can see what happened without
+polling logs. Failures are logged, never raised.
 """
 
 from __future__ import annotations
@@ -103,13 +106,49 @@ def _deliver_once(url: str, secret: str, payload: dict) -> bool:
         return False
 
 
-def _send_with_retries(url: str, secret: str, payload: dict) -> bool:
+def _record_webhook_outcome(task_id: str, webhook_state: str, message: str) -> None:
+    """Persist the delivery outcome onto the task (best-effort, never raises).
+
+    Records ``webhook_state`` ("delivered" / "failed" / "skipped") while
+    preserving the task's terminal state/progress, and appends a human-readable
+    summary to the task's existing ``warnings`` list.
+    """
+    from app.services import state as sm
+
+    try:
+        task = sm.state.get_task(task_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"webhook: could not load task {task_id} for outcome: {exc}")
+        return
+    if not task:
+        logger.debug(f"webhook: task {task_id} gone before outcome recorded")
+        return
+
+    warnings = list(task.get("warnings") or [])
+    warnings.append(message)
+    try:
+        sm.state.update_task(
+            task_id,
+            state=task.get("state", 0),
+            progress=task.get("progress", 0),
+            webhook_state=webhook_state,
+            warnings=warnings,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"webhook: could not record outcome for task {task_id}: {exc}")
+
+
+def _send_with_retries(task_id: str, url: str, secret: str, payload: dict) -> bool:
     for attempt, delay in enumerate(_WEBHOOK_RETRY_BACKOFF_SECONDS):
         if _deliver_once(url, secret, payload):
+            _record_webhook_outcome(task_id, "delivered", "webhook delivered")
             return True
         if attempt + 1 < _WEBHOOK_MAX_RETRIES:
             time.sleep(delay)
     logger.warning(f"webhook delivery failed after retries: {url!r}")
+    _record_webhook_outcome(
+        task_id, "failed", f"webhook delivery failed after {_WEBHOOK_MAX_RETRIES} attempts"
+    )
     return False
 
 
@@ -117,7 +156,8 @@ def notify_task_terminal(task_id: str, app_config=None) -> None:
     """Fire a completion webhook for a terminal task (best-effort, async).
 
     Runs on a daemon thread so generation is never blocked by slow or
-    unreachable webhook endpoints. Any failure is logged and swallowed.
+    unreachable webhook endpoints. The delivery outcome is recorded back on the
+    task (``webhook_state`` + ``warnings``); any failure is logged and swallowed.
     """
     from app.services import state as sm
 
@@ -136,12 +176,15 @@ def notify_task_terminal(task_id: str, app_config=None) -> None:
         app_config if app_config is not None else config.app
     )
     if not url:
+        # 没有配置 webhook_url 时什么都不写：记录 "skipped" 会污染每个任务的
+        # 状态（webhook_state + warnings），且对用户没有价值。
+        logger.debug("webhook skipped: no webhook_url configured")
         return
 
     payload = _build_payload(task)
     threading.Thread(
         target=_send_with_retries,
-        args=(url, secret, payload),
+        args=(task_id, url, secret, payload),
         daemon=True,
         name=f"webhook-{task_id}",
     ).start()

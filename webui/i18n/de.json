@@ -566,7 +566,10 @@
     "Clip Generation Failed": "Clip-Generierung fehlgeschlagen. Überprüfen Sie das Quellvideo und versuchen Sie es erneut.",
     "Clip Generation Completed": "Clip-Generierung abgeschlossen: {count} Clip(s) bereit",
     "Please Provide a Clip Source": "Bitte laden Sie zuerst eine Videodatei hoch oder geben Sie eine Video-URL ein",
-    "Enable Clip Generator": "Clip-Generator aktivieren"
+    "Enable Clip Generator": "Clip-Generator aktivieren",
+    "Clip Face Tracking": "Sprechergesicht verfolgen",
+    "Clip Face Tracking Hint": "Hält den Sprecher beim vertikalen Zuschnitt zentriert; ohne Gesicht wird mittig zugeschnitten.",
+    "Clip Generator Hint": "Fügen Sie ein langes Video (Podcast, Vlog, Webinar) oder eine URL ein, um mit KI ausgewählte vertikale Clips zu erzeugen."
   },
   "Agent Stage Intelligence": "Nische & Publikum analysieren",
   "Agent Stage Research": "Thema recherchieren",

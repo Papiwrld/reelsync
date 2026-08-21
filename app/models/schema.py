@@ -486,6 +486,7 @@ class ClipRequest(BaseModel):
     target_width: int = 1080
     target_height: int = 1920
     burn_subtitles: bool = False
+    face_track: bool = True
 
 
 class VideoScriptParams:

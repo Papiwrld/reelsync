@@ -255,6 +255,111 @@ def _heuristic_moments(
     return moments
 
 
+def _face_track_crop_region(
+    source_file: str,
+    start: float,
+    end: float,
+    target_aspect: float,
+    sample_count: int = 6,
+) -> dict | None:
+    """Find a vertical crop region that keeps the largest face centered.
+
+    Uses MediaPipe + OpenCV (optional deps). Samples ``sample_count`` frames
+    across [start, end), tracks the largest face box, and returns a
+    ``{"x", "y", "w", "h"}`` crop (pixel coords, x/y are top-left) sized to
+    ``target_aspect``. Returns None when no face is found or the deps are
+    unavailable — caller falls back to a centered crop.
+    """
+    try:
+        import cv2  # noqa: F401
+        import mediapipe as mp  # type: ignore
+    except Exception:  # noqa: BLE001 - optional dependency
+        return None
+
+    try:
+        cap = cv2.VideoCapture(source_file)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        return None
+    if not cap.isOpened():
+        return None
+
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS)  # type: ignore[attr-defined]
+        if not fps or fps <= 0:
+            fps = 30.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # type: ignore[attr-defined]
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))  # type: ignore[attr-defined]
+        if width <= 0 or height <= 0:
+            return None
+
+        with mp.solutions.face_detection.FaceDetection(
+            model_selection=1, min_detection_confidence=0.5
+        ) as detector:
+            faces: list[tuple[int, int, int, int]] = []  # (cx, cy, w, h)
+            for i in range(sample_count):
+                t = start + (end - start) * i / max(sample_count - 1, 1)
+                frame_idx = int(t * fps)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)  # type: ignore[attr-defined]
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    continue
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # type: ignore[attr-defined]
+                results = detector.process(rgb)
+                if not results.detections:
+                    continue
+                best = None
+                best_area = 0
+                for detection in results.detections:
+                    box = detection.location_data.relative_bounding_box
+                    if box is None:
+                        continue
+                    bw = box.width * width
+                    bh = box.height * height
+                    area = bw * bh
+                    if area > best_area:
+                        best_area = area
+                        best = (
+                            int((box.xmin + box.width / 2) * width),
+                            int((box.ymin + box.height / 2) * height),
+                            int(bw),
+                            int(bh),
+                        )
+                if best:
+                    faces.append(best)
+
+        if not faces:
+            return None
+        # Average the largest-face centers across samples for stability.
+        avg_cx = int(sum(f[0] for f in faces) / len(faces))
+        avg_cy = int(sum(f[1] for f in faces) / len(faces))
+        # Face stays in the top 1/3 of the vertical frame (classic talking-head
+        # framing) so the crop window is centered slightly above the face center.
+        target_cy = int(height * 0.40)
+        crop_w = int(height * target_aspect)
+        crop_h = height
+        if crop_w > width:
+            crop_w = width
+            crop_h = int(width / target_aspect)
+            if crop_h > height:
+                crop_h = height
+                crop_w = int(height * target_aspect)
+        # Center x on the face, clamp to frame.
+        crop_x = avg_cx - crop_w // 2
+        crop_x = max(0, min(crop_x, width - crop_w))
+        # Center y on target_cy (or face when it's above), clamp.
+        crop_y = target_cy - crop_h // 2
+        crop_y = max(0, min(crop_y, height - crop_h))
+        return {"x": crop_x, "y": crop_y, "w": crop_w, "h": crop_h}
+    except Exception as exc:  # noqa: BLE001 - face tracking is best-effort
+        logger.debug(f"face tracking unavailable for crop: {exc}")
+        return None
+    finally:
+        try:
+            cap.release()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def extract_clip(
     source_file: str,
     start: float,
@@ -263,19 +368,37 @@ def extract_clip(
     target_width: int = 1080,
     target_height: int = 1920,
     burn_subtitles: str = "",
+    face_track: bool = True,
 ) -> bool:
     """Extract and re-encode [start, end) as a vertical clip.
 
-    Crop/scale: center crop to target aspect then scale up to the target
-    resolution (no black bars). Optional subtitle file is burned in.
-    Returns True on success.
+    Crop/scale: prefers a face-tracked crop (keeps the speaker centered) when
+    ``face_track`` and MediaPipe are available; otherwise centers on the frame.
+    Optional subtitle file is burned in. Returns True on success.
     """
     aspect = target_width / target_height
-    # ffmpeg crop expression keeps the center band of the source aspect.
-    vf = (
-        f"crop=ih*{aspect:.4f}:ih,scale={target_width}:{target_height}:"
-        f"flags=lanczos"
-    )
+
+    if face_track:
+        region = _face_track_crop_region(source_file, start, end, aspect)
+    else:
+        region = None
+
+    if region:
+        x, y, w, h = region["x"], region["y"], region["w"], region["h"]
+        vf = (
+            f"crop={w}:{h}:{x}:{y},scale={target_width}:{target_height}:"
+            f"flags=lanczos"
+        )
+        logger.info(
+            f"clip {start:.1f}s-{end:.1f}s using face-tracked crop "
+            f"{w}x{h}@({x},{y})"
+        )
+    else:
+        # ffmpeg crop expression keeps the center band of the source aspect.
+        vf = (
+            f"crop=ih*{aspect:.4f}:ih,scale={target_width}:{target_height}:"
+            f"flags=lanczos"
+        )
     if burn_subtitles and os.path.isfile(burn_subtitles):
         escaped = burn_subtitles.replace("\\", "/").replace(":", "\\:")
         vf = f"{vf},subtitles='{escaped}'"
@@ -328,6 +451,7 @@ def generate_clips(
     target_width: int = 1080,
     target_height: int = 1920,
     burn_subtitles: bool = False,
+    face_track: bool = True,
 ) -> list[dict]:
     """Full pipeline: transcribe -> detect -> select -> extract.
 
@@ -370,6 +494,7 @@ def generate_clips(
                     target_width=target_width,
                     target_height=target_height,
                     burn_subtitles="",
+                    face_track=face_track,
                 )
                 if ok:
                     results.append(
@@ -410,6 +535,7 @@ def start_clip_generation(task_id, params) -> dict:
             target_width=int(params.get("target_width") or 1080),
             target_height=int(params.get("target_height") or 1920),
             burn_subtitles=bool(params.get("burn_subtitles") or False),
+            face_track=bool(params.get("face_track", True)),
         )
         if not results:
             raise RuntimeError("clip generation produced no clips")

@@ -566,7 +566,10 @@
     "Clip Generation Failed": "Error al generar los clips. Compruebe el vídeo de origen e inténtelo de nuevo.",
     "Clip Generation Completed": "Generación de clips completada: {count} clip(s) listos",
     "Please Provide a Clip Source": "Cargue primero un archivo de vídeo o introduzca la URL de un vídeo",
-    "Enable Clip Generator": "Activar generador de clips"
+    "Enable Clip Generator": "Activar generador de clips",
+    "Clip Face Tracking": "Rastrear rostro del orador",
+    "Clip Face Tracking Hint": "Mantiene al orador centrado al recortar en vertical; si no se detecta rostro, recorta al centro.",
+    "Clip Generator Hint": "Pega un video largo (podcast, vlog, seminario) o una URL para generar clips verticales con momentos seleccionados por IA."
   },
   "Agent Stage Intelligence": "Analizando nicho y audiencia",
   "Agent Stage Research": "Investigando el tema",

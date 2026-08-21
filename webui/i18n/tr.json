@@ -567,7 +567,10 @@
     "Clip Generation Failed": "Klip oluşturma başarısız. Kaynak videoyu kontrol edip tekrar deneyin.",
     "Clip Generation Completed": "Klip oluşturma tamamlandı: {count} klip hazır",
     "Please Provide a Clip Source": "Lütfen önce bir video dosyası yükleyin veya bir video URL'si girin",
-    "Enable Clip Generator": "Klip Oluşturucuyu Etkinleştir"
+    "Enable Clip Generator": "Klip Oluşturucuyu Etkinleştir",
+    "Clip Face Tracking": "Konuşmacı yüzünü takip et",
+    "Clip Face Tracking Hint": "Dikey kırpmada konuşmacıyı merkezde tutar; yüz algılanamazsa merkez kırpmaya düşer.",
+    "Clip Generator Hint": "Uzun bir video (podcast, vlog, webinar) veya URL yapıştırarak yapay zeka ile seçilen anlarla dikey klip üretin."
   },
   "Agent Stage Intelligence": "Niş ve kitle analiz ediliyor",
   "Agent Stage Research": "Konu araştırılıyor",

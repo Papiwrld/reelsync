@@ -6341,7 +6341,7 @@ def _render_clip_results(clips):
 
 
 def _handle_generate_clips(
-    source_type, uploaded_clip_file, clip_url, clip_count, min_duration, max_duration
+    source_type, uploaded_clip_file, clip_url, clip_count, min_duration, max_duration, face_track
 ):
     """校验 Clip Generator 输入并同步调用 clip_generator 服务。"""
     if source_type == _CLIP_SOURCE_FILE:
@@ -6373,6 +6373,7 @@ def _handle_generate_clips(
             count=int(clip_count),
             min_duration=float(min_duration),
             max_duration=float(max_duration),
+            face_track=bool(face_track),
         )
 
     clips = []
@@ -6467,6 +6468,14 @@ def _render_clip_generator_panel():
             key="clip_max_duration_input",
         )
 
+        face_track = st.checkbox(
+            tr("Clip Face Tracking"),
+            value=True,
+            key="clip_face_track",
+            help=tr("Clip Face Tracking Hint"),
+        )
+        st.caption(tr("Clip Generator Hint"))
+
         if st.button(
             tr("Generate Clips"),
             key="generate_clips_button",
@@ -6480,6 +6489,7 @@ def _render_clip_generator_panel():
                 clip_count,
                 min_duration,
                 max_duration,
+                face_track,
             )
 
         _render_state_status(_CLIP_GENERATION_STATUS_KEY, tr("Generating Clips"))

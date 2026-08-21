@@ -566,7 +566,10 @@
     "Clip Generation Failed": "Không thể tạo clip. Hãy kiểm tra video nguồn và thử lại.",
     "Clip Generation Completed": "Đã hoàn tất tạo clip: {count} clip sẵn sàng",
     "Please Provide a Clip Source": "Vui lòng tải lên tệp video hoặc nhập URL video trước",
-    "Enable Clip Generator": "Bật Trình tạo clip"
+    "Enable Clip Generator": "Bật Trình tạo clip",
+    "Clip Face Tracking": "Theo dõi khuôn mặt người nói",
+    "Clip Face Tracking Hint": "Giữ người nói ở giữa khi cắt dọc; dự phòng cắt giữa nếu không phát hiện khuôn mặt.",
+    "Clip Generator Hint": "Dán một video dài (podcast, vlog, webinar) hoặc URL để tạo clip dọc với các khoảnh khắc do AI chọn."
   },
   "Agent Stage Intelligence": "Đang phân tích niche & khán giả",
   "Agent Stage Research": "Đang nghiên cứu chủ đề",

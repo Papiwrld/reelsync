@@ -593,7 +593,10 @@
     "Clip Generation Failed": "Clip generation failed. Please check the source video and try again.",
     "Clip Generation Completed": "Clip generation completed: {count} clip(s) ready",
     "Please Provide a Clip Source": "Please upload a video file or enter a video URL first",
-    "Enable Clip Generator": "Enable Clip Generator"
+    "Enable Clip Generator": "Enable Clip Generator",
+    "Clip Face Tracking": "Track speaker face",
+    "Clip Face Tracking Hint": "Keeps the speaker centered when cropping to vertical; falls back to center crop if no face is detected.",
+    "Clip Generator Hint": "Paste a long video (podcast, vlog, webinar) or a URL to generate viral-ready vertical clips with AI-selected moments."
   },
   "Agent Stage Intelligence": "Analyzing the niche & audience",
   "Agent Stage Research": "Researching the topic",
