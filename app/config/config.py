@@ -11,7 +11,7 @@ import toml
 from loguru import logger
 
 from app import __version__
-from app.utils.secrets import get_secret
+from app.utils.secrets import delete_secret, get_secret, set_secret
 
 root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 config_file = f"{root_dir}/config.toml"
@@ -213,9 +213,11 @@ def _apply_pending_config_updates_locked():
         # 只能看到应用前或应用后的完整状态，不会读到只更新了一半的配置集合。
         for config_section, key, value in updates:
             if value is _DELETE:
+                _maybe_persist_secret(config_section, key, None)
                 config_section.pop(key, None)
             else:
                 config_section[key] = value
+                _maybe_persist_secret(config_section, key, value)
     return bool(updates)
 
 
@@ -550,104 +552,236 @@ def load_config():
 
     # Apply environment variable overrides
     _apply_env_overrides(_config_)
+    # 已存在于 config.toml 的明文凭据自动迁移到系统凭据管理器（一次性，
+    # 迁移后下次保存即从文件中清空），用户无需重新输入。
+    _migrate_plaintext_secrets_to_keyring(_config_)
     return _config_
+
+
+# 环境变量 / 系统凭据管理器 与 (section, key) 的完整映射。
+# 凭据类键（_is_secret_key 命中）通过 keyring 持久化，绝不回写 config.toml；
+# 其余键仅作为环境变量覆盖入口。
+_ENV_VAR_MAPPING = {
+    "PEXELS_API_KEY": ("app", "pexels_api_keys"),
+    "PIXABAY_API_KEY": ("app", "pixabay_api_keys"),
+    "COVERR_API_KEY": ("app", "coverr_api_keys"),
+    "CUSTOM_API_URL": ("app", "custom_api_url"),
+    "CUSTOM_API_KEY": ("app", "custom_api_key"),
+    "CUSTOM_API_METHOD": ("app", "custom_api_method"),
+    "CUSTOM_API_RESPONSE_FORMAT": ("app", "custom_api_response_format"),
+    "CUSTOM_API_EXTRA_HEADERS": ("app", "custom_api_extra_headers"),
+    "CUSTOM_API_EXTRA_BODY": ("app", "custom_api_extra_body"),
+    "TWELVELABS_API_KEY": ("app", "twelvelabs_api_keys"),
+    "SONILO_API_KEY": ("app", "sonilo_api_key"),
+    "SONILO_BASE_URL": ("app", "sonilo_base_url"),
+    "LLM_PROVIDER": ("app", "llm_provider"),
+    "MOONSHOT_API_KEY": ("app", "moonshot_api_key"),
+    "MOONSHOT_BASE_URL": ("app", "moonshot_base_url"),
+    "MOONSHOT_MODEL_NAME": ("app", "moonshot_model_name"),
+    "OPENAI_API_KEY": ("app", "openai_api_key"),
+    "OPENAI_BASE_URL": ("app", "openai_base_url"),
+    "OPENAI_MODEL_NAME": ("app", "openai_model_name"),
+    "GEMINI_API_KEY": ("app", "gemini_api_key"),
+    "GEMINI_BASE_URL": ("app", "gemini_base_url"),
+    "GEMINI_MODEL_NAME": ("app", "gemini_model_name"),
+    "DEEPSEEK_API_KEY": ("app", "deepseek_api_key"),
+    "DEEPSEEK_BASE_URL": ("app", "deepseek_base_url"),
+    "DEEPSEEK_MODEL_NAME": ("app", "deepseek_model_name"),
+    "QWEN_API_KEY": ("app", "qwen_api_key"),
+    "QWEN_MODEL_NAME": ("app", "qwen_model_name"),
+    "AZURE_API_KEY": ("app", "azure_api_key"),
+    "AZURE_BASE_URL": ("app", "azure_base_url"),
+    "AZURE_MODEL_NAME": ("app", "azure_model_name"),
+    "VOLCENGINE_API_KEY": ("app", "volcengine_api_key"),
+    "VOLCENGINE_BASE_URL": ("app", "volcengine_base_url"),
+    "VOLCENGINE_MODEL_NAME": ("app", "volcengine_model_name"),
+    "GROK_API_KEY": ("app", "grok_api_key"),
+    "GROK_BASE_URL": ("app", "grok_base_url"),
+    "GROK_MODEL_NAME": ("app", "grok_model_name"),
+    "MINIMAX_API_KEY": ("app", "minimax_api_key"),
+    "MINIMAX_BASE_URL": ("app", "minimax_base_url"),
+    "MINIMAX_MODEL_NAME": ("app", "minimax_model_name"),
+    "MIMO_API_KEY": ("app", "mimo_api_key"),
+    "MIMO_BASE_URL": ("app", "mimo_base_url"),
+    "MIMO_MODEL_NAME": ("app", "mimo_model_name"),
+    "CLOUDFLARE_API_KEY": ("app", "cloudflare_api_key"),
+    "CLOUDFLARE_ACCOUNT_ID": ("app", "cloudflare_account_id"),
+    "CLOUDFLARE_GATEWAY_ID": ("app", "cloudflare_gateway_id"),
+    "CLOUDFLARE_MODEL_NAME": ("app", "cloudflare_model_name"),
+    "MODELSCOPE_API_KEY": ("app", "modelscope_api_key"),
+    "MODELSCOPE_BASE_URL": ("app", "modelscope_base_url"),
+    "MODELSCOPE_MODEL_NAME": ("app", "modelscope_model_name"),
+    "AIHUBMIX_API_KEY": ("app", "aihubmix_api_key"),
+    "AIHUBMIX_BASE_URL": ("app", "aihubmix_base_url"),
+    "AIHUBMIX_MODEL_NAME": ("app", "aihubmix_model_name"),
+    "AIMLAPI_API_KEY": ("app", "aimlapi_api_key"),
+    "AIMLAPI_BASE_URL": ("app", "aimlapi_base_url"),
+    "AIMLAPI_MODEL_NAME": ("app", "aimlapi_model_name"),
+    "EVOLINK_API_KEY": ("app", "evolink_api_key"),
+    "EVOLINK_BASE_URL": ("app", "evolink_base_url"),
+    "EVOLINK_MODEL_NAME": ("app", "evolink_model_name"),
+    "OLLAMA_BASE_URL": ("app", "ollama_base_url"),
+    "OLLAMA_MODEL_NAME": ("app", "ollama_model_name"),
+    "ONEAPI_API_KEY": ("app", "oneapi_api_key"),
+    "ONEAPI_BASE_URL": ("app", "oneapi_base_url"),
+    "ONEAPI_MODEL_NAME": ("app", "oneapi_model_name"),
+    "LITELLM_MODEL_NAME": ("app", "litellm_model_name"),
+    "GROQ_API_KEY": ("app", "groq_api_key"),
+    "GROQ_BASE_URL": ("app", "groq_base_url"),
+    "GROQ_MODEL_NAME": ("app", "groq_model_name"),
+    "POLLINATIONS_API_KEY": ("app", "pollinations_api_key"),
+    "POLLINATIONS_BASE_URL": ("app", "pollinations_base_url"),
+    "POLLINATIONS_MODEL_NAME": ("app", "pollinations_model_name"),
+    "ENABLE_REDIS": ("app", "enable_redis"),
+    "REDIS_HOST": ("app", "redis_host"),
+    "REDIS_PORT": ("app", "redis_port"),
+    "REDIS_DB": ("app", "redis_db"),
+    "REDIS_PASSWORD": ("app", "redis_password"),
+    "MAX_CONCURRENT_TASKS": ("app", "max_concurrent_tasks"),
+    "MAX_QUEUED_TASKS": ("app", "max_queued_tasks"),
+    "UPLOAD_POST_ENABLED": ("app", "upload_post_enabled"),
+    "UPLOAD_POST_API_KEY": ("app", "upload_post_api_key"),
+    "UPLOAD_POST_USERNAME": ("app", "upload_post_username"),
+    "UPLOAD_POST_PLATFORMS": ("app", "upload_post_platforms"),
+    "UPLOAD_POST_AUTO_UPLOAD": ("app", "upload_post_auto_upload"),
+    "UPLOAD_POST_YOUTUBE_PRIVACY_STATUS": ("app", "upload_post_youtube_privacy_status"),
+    "UPLOAD_POST_MAX_PENDING_TASKS": ("app", "upload_post_max_pending_tasks"),
+    "ENABLE_WEB_SCRAPING": ("app", "enable_web_scraping"),
+    "CUSTOM_API_VIDEO_URL": ("app", "custom_api_video_url"),
+    "CUSTOM_API_IMAGE_URL": ("app", "custom_api_image_url"),
+    "CUSTOM_API_PROVIDER_PRESET": ("app", "custom_api_provider_preset"),
+    "CUSTOM_API_VIDEO_MODEL": ("app", "custom_api_video_model"),
+    "CUSTOM_API_IMAGE_MODEL": ("app", "custom_api_image_model"),
+}
+
+# 独立 section 中由专属代码处理的凭据映射（_apply_env_overrides 内联逻辑）。
+_EXTRA_SECRET_ENV_VARS = {
+    "AZURE_SPEECH_KEY": ("azure", "speech_key"),
+    "SILICONFLOW_API_KEY": ("siliconflow", "api_key"),
+    "MINIMAX_TTS_API_KEY": ("minimax_tts", "api_key"),
+    "ELEVENLABS_API_KEY": ("elevenlabs", "api_key"),
+    "CHATTERBOX_API_KEY": ("chatterbox", "api_key"),
+    "RESEARCH_API_KEY": ("research", "api_key"),
+    "OPENALEX_API_KEY": ("research", "openalex_api_key"),
+    "NASA_API_KEY": ("research", "nasa_api_key"),
+}
+
+# (section, key) -> 环境变量名 / keyring 条目名。WebUI 保存凭据时用它把值
+# 写进系统凭据管理器，而不是明文落盘 config.toml。
+_SECTION_KEY_TO_ENV = {
+    (section, key): env for env, (section, key) in _ENV_VAR_MAPPING.items()
+}
+_SECTION_KEY_TO_ENV.update(
+    {(section, key): env for env, (section, key) in _EXTRA_SECRET_ENV_VARS.items()}
+)
+
+
+def _serialize_secret_value(value) -> str:
+    """列表型密钥（如 pexels_api_keys）序列化为逗号分隔串，与 env 解析一致。"""
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(v).strip() for v in value if str(v).strip())
+    return str(value)
+
+
+def _is_empty_secret_value(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (list, tuple)):
+        return not [v for v in value if str(v).strip()]
+    return not str(value).strip()
+
+
+def _resolve_section_name(section_dict):
+    name = getattr(section_dict, "_section_name", None)
+    if name:
+        return name
+    for candidate in (
+        "app",
+        "azure",
+        "siliconflow",
+        "minimax_tts",
+        "elevenlabs",
+        "chatterbox",
+        "ui",
+        "research",
+    ):
+        if globals().get(candidate) is section_dict:
+            return candidate
+    return None
+
+
+def _maybe_persist_secret(section_dict, key, value):
+    """WebUI 保存凭据时写入系统凭据管理器并标记为“不得落盘”。
+
+    keyring 不可用时保持旧的明文 config.toml 行为（宁可明文也不能丢密钥）。
+    """
+    section_name = _resolve_section_name(section_dict)
+    if not section_name or not _is_secret_key(key):
+        return
+    env_var = _SECTION_KEY_TO_ENV.get((section_name, key))
+    if not env_var:
+        return
+    try:
+        if _is_empty_secret_value(value):
+            delete_secret(env_var)
+        else:
+            if not set_secret(env_var, _serialize_secret_value(value)):
+                logger.debug(
+                    f"system credential manager unavailable; keeping "
+                    f"{section_name}.{key} in local config only"
+                )
+                return
+        _secret_sourced_keys.add((section_name, key))
+        logger.info(f"stored credential for {section_name}.{key} in system credential manager")
+    except Exception as exc:  # noqa: BLE001 - 凭据存储失败不能阻塞配置保存
+        logger.warning(
+            f"failed to persist {section_name}.{key} to system credential "
+            f"manager: {exc}; keeping local config fallback"
+        )
+
+
+def _migrate_plaintext_secrets_to_keyring(config: dict):
+    """启动时把 config.toml 里已有的明文凭据迁移到系统凭据管理器。
+
+    迁移成功后这些键被标记为 secret-sourced，下次保存时自动从
+    config.toml 清空 —— 用户无需重新输入任何密钥。
+    """
+    if os.getenv("REELSYNC_SKIP_SECRET_MIGRATION", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        return 0
+    migrated = 0
+    for (section_name, key), env_var in _SECTION_KEY_TO_ENV.items():
+        if not _is_secret_key(key):
+            continue
+        if (section_name, key) in _secret_sourced_keys:
+            continue
+        value = (config.get(section_name, {}) or {}).get(key)
+        if _is_empty_secret_value(value):
+            continue
+        try:
+            if not set_secret(env_var, _serialize_secret_value(value)):
+                continue
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"secret migration skipped for {section_name}.{key}: {exc}")
+            continue
+        _secret_sourced_keys.add((section_name, key))
+        migrated += 1
+    if migrated:
+        logger.info(
+            f"migrated {migrated} credential(s) from config.toml to the "
+            "system credential manager; they will be blanked on next save"
+        )
+    return migrated
 
 
 def _apply_env_overrides(config: dict):
     """Apply environment variable overrides to config. Env vars take precedence over TOML."""
     # App section
-    env_mapping = {
-        "PEXELS_API_KEY": ("app", "pexels_api_keys"),
-        "PIXABAY_API_KEY": ("app", "pixabay_api_keys"),
-        "COVERR_API_KEY": ("app", "coverr_api_keys"),
-        "CUSTOM_API_URL": ("app", "custom_api_url"),
-        "CUSTOM_API_KEY": ("app", "custom_api_key"),
-        "CUSTOM_API_METHOD": ("app", "custom_api_method"),
-        "CUSTOM_API_RESPONSE_FORMAT": ("app", "custom_api_response_format"),
-        "CUSTOM_API_EXTRA_HEADERS": ("app", "custom_api_extra_headers"),
-        "CUSTOM_API_EXTRA_BODY": ("app", "custom_api_extra_body"),
-        "TWELVELABS_API_KEY": ("app", "twelvelabs_api_keys"),
-        "SONILO_API_KEY": ("app", "sonilo_api_key"),
-        "SONILO_BASE_URL": ("app", "sonilo_base_url"),
-        "LLM_PROVIDER": ("app", "llm_provider"),
-        "MOONSHOT_API_KEY": ("app", "moonshot_api_key"),
-        "MOONSHOT_BASE_URL": ("app", "moonshot_base_url"),
-        "MOONSHOT_MODEL_NAME": ("app", "moonshot_model_name"),
-        "OPENAI_API_KEY": ("app", "openai_api_key"),
-        "OPENAI_BASE_URL": ("app", "openai_base_url"),
-        "OPENAI_MODEL_NAME": ("app", "openai_model_name"),
-        "GEMINI_API_KEY": ("app", "gemini_api_key"),
-        "GEMINI_BASE_URL": ("app", "gemini_base_url"),
-        "GEMINI_MODEL_NAME": ("app", "gemini_model_name"),
-        "DEEPSEEK_API_KEY": ("app", "deepseek_api_key"),
-        "DEEPSEEK_BASE_URL": ("app", "deepseek_base_url"),
-        "DEEPSEEK_MODEL_NAME": ("app", "deepseek_model_name"),
-        "QWEN_API_KEY": ("app", "qwen_api_key"),
-        "QWEN_MODEL_NAME": ("app", "qwen_model_name"),
-        "AZURE_API_KEY": ("app", "azure_api_key"),
-        "AZURE_BASE_URL": ("app", "azure_base_url"),
-        "AZURE_MODEL_NAME": ("app", "azure_model_name"),
-        "VOLCENGINE_API_KEY": ("app", "volcengine_api_key"),
-        "VOLCENGINE_BASE_URL": ("app", "volcengine_base_url"),
-        "VOLCENGINE_MODEL_NAME": ("app", "volcengine_model_name"),
-        "GROK_API_KEY": ("app", "grok_api_key"),
-        "GROK_BASE_URL": ("app", "grok_base_url"),
-        "GROK_MODEL_NAME": ("app", "grok_model_name"),
-        "MINIMAX_API_KEY": ("app", "minimax_api_key"),
-        "MINIMAX_BASE_URL": ("app", "minimax_base_url"),
-        "MINIMAX_MODEL_NAME": ("app", "minimax_model_name"),
-        "MIMO_API_KEY": ("app", "mimo_api_key"),
-        "MIMO_BASE_URL": ("app", "mimo_base_url"),
-        "MIMO_MODEL_NAME": ("app", "mimo_model_name"),
-        "CLOUDFLARE_API_KEY": ("app", "cloudflare_api_key"),
-        "CLOUDFLARE_ACCOUNT_ID": ("app", "cloudflare_account_id"),
-        "CLOUDFLARE_GATEWAY_ID": ("app", "cloudflare_gateway_id"),
-        "CLOUDFLARE_MODEL_NAME": ("app", "cloudflare_model_name"),
-        "MODELSCOPE_API_KEY": ("app", "modelscope_api_key"),
-        "MODELSCOPE_BASE_URL": ("app", "modelscope_base_url"),
-        "MODELSCOPE_MODEL_NAME": ("app", "modelscope_model_name"),
-        "AIHUBMIX_API_KEY": ("app", "aihubmix_api_key"),
-        "AIHUBMIX_BASE_URL": ("app", "aihubmix_base_url"),
-        "AIHUBMIX_MODEL_NAME": ("app", "aihubmix_model_name"),
-        "AIMLAPI_API_KEY": ("app", "aimlapi_api_key"),
-        "AIMLAPI_BASE_URL": ("app", "aimlapi_base_url"),
-        "AIMLAPI_MODEL_NAME": ("app", "aimlapi_model_name"),
-        "EVOLINK_API_KEY": ("app", "evolink_api_key"),
-        "EVOLINK_BASE_URL": ("app", "evolink_base_url"),
-        "EVOLINK_MODEL_NAME": ("app", "evolink_model_name"),
-        "OLLAMA_BASE_URL": ("app", "ollama_base_url"),
-        "OLLAMA_MODEL_NAME": ("app", "ollama_model_name"),
-        "ONEAPI_API_KEY": ("app", "oneapi_api_key"),
-        "ONEAPI_BASE_URL": ("app", "oneapi_base_url"),
-        "ONEAPI_MODEL_NAME": ("app", "oneapi_model_name"),
-        "LITELLM_MODEL_NAME": ("app", "litellm_model_name"),
-        "GROQ_API_KEY": ("app", "groq_api_key"),
-        "GROQ_BASE_URL": ("app", "groq_base_url"),
-        "GROQ_MODEL_NAME": ("app", "groq_model_name"),
-        "POLLINATIONS_API_KEY": ("app", "pollinations_api_key"),
-        "POLLINATIONS_BASE_URL": ("app", "pollinations_base_url"),
-        "POLLINATIONS_MODEL_NAME": ("app", "pollinations_model_name"),
-        "ENABLE_REDIS": ("app", "enable_redis"),
-        "REDIS_HOST": ("app", "redis_host"),
-        "REDIS_PORT": ("app", "redis_port"),
-        "REDIS_DB": ("app", "redis_db"),
-        "REDIS_PASSWORD": ("app", "redis_password"),
-        "MAX_CONCURRENT_TASKS": ("app", "max_concurrent_tasks"),
-        "MAX_QUEUED_TASKS": ("app", "max_queued_tasks"),
-        "UPLOAD_POST_ENABLED": ("app", "upload_post_enabled"),
-        "UPLOAD_POST_API_KEY": ("app", "upload_post_api_key"),
-        "UPLOAD_POST_USERNAME": ("app", "upload_post_username"),
-        "UPLOAD_POST_PLATFORMS": ("app", "upload_post_platforms"),
-        "UPLOAD_POST_AUTO_UPLOAD": ("app", "upload_post_auto_upload"),
-        "UPLOAD_POST_YOUTUBE_PRIVACY_STATUS": ("app", "upload_post_youtube_privacy_status"),
-        "UPLOAD_POST_MAX_PENDING_TASKS": ("app", "upload_post_max_pending_tasks"),
-        "ENABLE_WEB_SCRAPING": ("app", "enable_web_scraping"),
-        "CUSTOM_API_VIDEO_URL": ("app", "custom_api_video_url"),
-        "CUSTOM_API_IMAGE_URL": ("app", "custom_api_image_url"),
-        "CUSTOM_API_PROVIDER_PRESET": ("app", "custom_api_provider_preset"),
-        "CUSTOM_API_VIDEO_MODEL": ("app", "custom_api_video_model"),
-        "CUSTOM_API_IMAGE_MODEL": ("app", "custom_api_image_model"),
-    }
+    env_mapping = _ENV_VAR_MAPPING
     for env_var, (section, key) in env_mapping.items():
         value = get_secret(env_var)
         if value is not None:
