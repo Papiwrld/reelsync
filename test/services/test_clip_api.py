@@ -69,7 +69,7 @@ class TestClipGeneratorPipeline(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             out_ok = os.path.join(temp_dir, "ok.mp4")
             out_fail = os.path.join(temp_dir, "fail.mp4")
-            Path(out_ok).write_bytes(b"x")
+            Path(out_ok).write_bytes(b"x" * 2048)
             with patch(
                 "app.services.clip_generator.subprocess.run",
                 return_value=proc_ok,

@@ -40,6 +40,30 @@ def _ffmpeg_exe() -> str:
 def _probe_duration(file_path: str) -> float:
     import subprocess as sp
 
+    # Try ffprobe first (more reliable, no re-encode)
+    try:
+        ffprobe = _ffmpeg_exe().replace("ffmpeg", "ffprobe")
+        if os.path.isfile(ffprobe):
+            out = sp.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    file_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            ).stdout
+            if out and out.strip():
+                return float(out.strip())
+    except Exception:  # noqa: BLE001
+        pass
     cmd = [
         _ffmpeg_exe(),
         "-hide_banner",
@@ -149,10 +173,15 @@ def _extract_audio(video_file: str, save_dir: str) -> str:
 def _build_transcript_text(items: list[dict]) -> str:
     lines = []
     for i, item in enumerate(items):
-        lines.append(
-            f"[{item.get('start_time', 0):.1f}s-{item.get('end_time', 0):.1f}s] "
-            f"{item.get('msg', '')}"
-        )
+        try:
+            s = float(item.get("start_time", 0))
+        except Exception:
+            s = 0.0
+        try:
+            e = float(item.get("end_time", 0))
+        except Exception:
+            e = 0.0
+        lines.append(f"[{s:.1f}s-{e:.1f}s] {item.get('msg', '')}")
     return "\n".join(lines)
 
 
@@ -162,6 +191,7 @@ def select_moments(
     count: int = 3,
     min_duration: float = 15.0,
     max_duration: float = 60.0,
+    total_duration: float = 0.0,
 ) -> list[dict]:
     """Select viral moments via LLM (fallback: equal-interval heuristic).
 
@@ -171,18 +201,18 @@ def select_moments(
     """
     if not transcript:
         return _heuristic_moments(
-            scene_times, count, min_duration, max_duration
+            scene_times, count, min_duration, max_duration, total_duration
         )
     try:
         from app.services import llm as llm_service
 
         transcript_text = _build_transcript_text(transcript)
-        scene_text = ", ".join(f"{t:.1f}s" for t in scene_times[:80])
+        scene_text = ", ".join(f"{float(t):.1f}s" for t in scene_times[:80])
         prompt = (
             "You are a viral clip editor. Given a transcript with timestamps and "
             "scene-change timestamps, pick the most engaging, self-contained "
-            f"{count} moments for short-form video (each {min_duration:.0f}-"
-            f"{max_duration:.0f} seconds). Prefer moments with a hook, a payoff, "
+            f"{int(count)} moments for short-form video (each {float(min_duration):.0f}-"
+            f"{float(max_duration):.0f} seconds). Prefer moments with a hook, a payoff, "
             "or a strong statement. Snap start/end to nearby scene changes where "
             "possible. Return ONLY a JSON array, no markdown:\n"
             '[{"start": <sec>, "end": <sec>, "title": "hook line", '
@@ -196,7 +226,11 @@ def select_moments(
             return _heuristic_moments(
                 scene_times, count, min_duration, max_duration
             )
-        cleaned = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.I)
+        cleaned = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.I | re.M)
+        # Some models wrap the array in extra text — extract the first JSON array
+        m = re.search(r"\[.*\]", cleaned, re.S)
+        if m:
+            cleaned = m.group(0)
         data = json.loads(cleaned)
         moments = []
         for entry in data:
@@ -224,7 +258,7 @@ def select_moments(
             return moments[:count]
     except Exception as exc:  # noqa: BLE001 - LLM failure never blocks
         logger.warning(f"LLM moment selection error, using heuristic: {exc}")
-    return _heuristic_moments(scene_times, count, min_duration, max_duration)
+    return _heuristic_moments(scene_times, count, min_duration, max_duration, total_duration)
 
 
 def _heuristic_moments(
@@ -331,7 +365,6 @@ def _face_track_crop_region(
             return None
         # Average the largest-face centers across samples for stability.
         avg_cx = int(sum(f[0] for f in faces) / len(faces))
-        avg_cy = int(sum(f[1] for f in faces) / len(faces))
         # Face stays in the top 1/3 of the vertical frame (classic talking-head
         # framing) so the crop window is centered slightly above the face center.
         target_cy = int(height * 0.40)
@@ -433,9 +466,18 @@ def extract_clip(
             cmd, capture_output=True, text=True, timeout=600, check=False
         )
         if proc.returncode == 0 and os.path.isfile(output_path):
+            try:
+                sz = os.path.getsize(output_path)
+                if sz < 1024:
+                    logger.warning(
+                        f"clip extraction produced tiny file ({sz} bytes): {proc.stderr[-800:] if proc.stderr else ''} cmd={' '.join(cmd)}"
+                    )
+                    return False
+            except Exception:
+                pass
             return True
         logger.warning(
-            f"clip extraction failed: {proc.stderr[-300:] if proc.stderr else ''}"
+            f"clip extraction failed: {proc.stderr[-800:] if proc.stderr else ''} cmd={' '.join(cmd)}"
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"clip extraction raised: {exc}")
@@ -472,12 +514,21 @@ def generate_clips(
             if audio:
                 transcript = _transcribe_audio(audio, tmp)
             scenes = detect_scenes(source_video)
+            duration = _probe_duration(source_video)
+            # Fallback to transcript duration if probe fails (e.g. ffprobe not found)
+            if duration <= 0 and transcript:
+                try:
+                    duration = max(float(x.get("end_time", 0) or 0) for x in transcript)
+                except Exception:
+                    duration = 0
+            logger.info(f"clip source duration probe={duration:.1f}s scenes={len(scenes)} transcript_items={len(transcript)}")
             moments = select_moments(
                 transcript,
                 scenes,
                 count=count,
                 min_duration=min_duration,
                 max_duration=max_duration,
+                total_duration=duration,
             )
             results = []
             for idx, moment in enumerate(moments):
